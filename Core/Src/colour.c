@@ -12,6 +12,7 @@
 	#include "colour.h"
 #include "bluetooth.h"
 #include "stdio.h"
+#include <stdlib.h>
 
 	#define TCS34725_COMMAND_BIT    0x80
 	#define TCS34725_ENABLE         0x00

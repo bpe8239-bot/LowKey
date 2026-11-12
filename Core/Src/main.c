@@ -34,7 +34,6 @@
  *   W = forward     S = backward     A = turn left     D = turn right
  *   X or SPACE = stop
  *   1-9 = speed (1 slowest, 9 fastest)
- *   I = IR sensor monitor (motors stopped), M = automatic line following
  *   ? = show help. Manual movement times out after 1 seconds without a new command.
  */
 /**
@@ -66,6 +65,8 @@
 #include "servo_claw.h"
 #include "bluetooth.h"
 #include "line_following.h"
+#include "colour.h"
+#include "mission.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,7 +98,7 @@ static char cmd = 'X';
 static int speed = 750;                 /* 0-999 */
 static uint32_t lastCmdTime = 0;
 static uint8_t autoMode = 0;           /* 1 = follow IR line */
-static uint8_t sensorOnly = 0;         /* 1 = IR monitor; motors stopped */
+static uint8_t colourReady = 0;
 
 /* USER CODE END PV */
 
@@ -114,6 +115,55 @@ static void MX_I2C1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+//Colour Debug
+#define COLOUR_DEBUG 1
+#define COLOUR_REPORT_MS 500U
+
+static void colourDebugTick(void)
+{
+#if COLOUR_DEBUG
+    static uint32_t lastReport = 0;
+    uint32_t now = HAL_GetTick();
+
+    if (!colourReady) return;
+
+    if ((now - lastReport) < COLOUR_REPORT_MS)
+        return;
+
+    lastReport = now;
+
+    ColourData_t raw;
+
+    if (ColourSensor_ReadRaw(&raw) != HAL_OK)
+    {
+        btPrint("[COLOUR] READ ERROR\r\n");
+        return;
+    }
+
+    DetectedColour_t detected = ColourSensor_GetColour();
+
+    const char *name = "UNKNOWN";
+
+    if (detected == COLOUR_RED)
+        name = "RED";
+    else if (detected == COLOUR_GREEN)
+        name = "GREEN";
+    else if (detected == COLOUR_BLUE)
+        name = "BLUE";
+
+    char msg[100];
+
+    snprintf(msg, sizeof(msg),
+             "[COLOUR] R:%u G:%u B:%u C:%u | %s\r\n",
+             (unsigned)raw.r,
+             (unsigned)raw.g,
+             (unsigned)raw.b,
+             (unsigned)raw.c,
+             name);
+
+    btPrint(msg);
+#endif
+}
 
 /*Bluetooth Keybind command*/
 static void handleBtCommand(char c)
@@ -136,24 +186,13 @@ static void handleBtCommand(char c)
         if (c == 'M' || c == 'm')
         {
             autoMode = 1;
-            sensorOnly = 0;
             lineFollowReset();
             btPrint("[MODE] AUTO LINE FOLLOWING\r\n");
             return;
         }
-	if (c == 'I' || c == 'i')
-	{
-		autoMode = 0;
-		sensorOnly = 1;
-		cmd = 'X';
-		stopMotors();
-		btPrint("[MODE] IR MONITOR (motors stopped)\r\n");
-		return;
-	}
 	if (c == 'X' || c == 'x' || c == ' ') /*Stop motor command*/
 	{
 		autoMode = 0;
-		sensorOnly = 0;
 		cmd = 'X';
 		stopMotors();
 		btPrint("[MOTOR] STOP\r\n");
@@ -161,7 +200,7 @@ static void handleBtCommand(char c)
 	}
 	if (c == '?' || c == 'H' || c == 'h') /*List of Command*/
 	{
-		btPrint("[HELP] W/S/A/D move; X stop; M auto; I IR monitor; 1-9 speed; KP<n>/KD<n> tune, K show; ? help\r\n");
+		btPrint("[HELP] W/S/A/D move; X stop; M auto; 1-9 speed; KP/KD tune; ? help\r\n");
 		return;
 	}
 
@@ -187,7 +226,6 @@ static void handleBtCommand(char c)
 	if (motion != NULL)
 	{
 		autoMode = 0;
-		sensorOnly = 0;
 		cmd = c;
 		lastCmdTime = HAL_GetTick();
 		snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
@@ -251,9 +289,21 @@ int main(void)
     /* start listening to Bluetooth */
   btPrint("[STM32] Ready. Send ? for help.\r\n");
 
+  	//Claw
     if (Claw_Init(&htim3) != HAL_OK)
     {
         Error_Handler();
+    }
+
+    //Colour Sensor
+    if (ColourSensor_Init(&hi2c1) == HAL_OK)
+    {
+        colourReady = 1;
+        btPrint("[COLOUR] INIT OK\r\n");
+    }
+    else
+    {
+        btPrint("[COLOUR] INIT FAILED\r\n");
     }
   /* USER CODE END 2 */
 
@@ -273,10 +323,7 @@ int main(void)
     if (autoMode)
     {
       lineFollow(speed);
-    }
-    else if (sensorOnly)
-    {
-      monitorIR();
+      colourDebugTick();
     }
     else
     {
@@ -534,8 +581,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  /*Configure GPIO pins : PB12 PB13 PB14 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14;
+  /*Configure GPIO pins : PB11 PB12 PB13 PB14
+                           PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
+                          |GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);

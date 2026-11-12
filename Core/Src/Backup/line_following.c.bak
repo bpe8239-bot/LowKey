@@ -3,6 +3,19 @@
  *
  *  Created on: 8 Nov 2026
  *      Author: bpe82
+ *
+ * PD line following + dashed-gap hold + 90 degree corner handling.
+ *
+ * Corner logic (all in the "all white" branch of lineFollow):
+ *   The sensor row reaches the corner and sees the sideways bar (110 / 011),
+ *   then everything goes white (000) once the row has passed it.
+ *   1. Drive straight for cornerFwdMs so the wheels reach the corner
+ *      (a dashed-line gap is much shorter, so the line comes back first and
+ *       the robot just carries on following).
+ *   2. Pivot in place toward the side that saw the bar.
+ *   3. As soon as any sensor sees the line again, normal following resumes.
+ *   4. Stop if the pivot finds nothing within PIVOT_TIMEOUT_MS.
+ *   If the line was lost sideways (100 / 001) it pivots immediately.
  */
 
 #include "main.h"
@@ -16,24 +29,26 @@
                                        Flip to GPIO_PIN_RESET if it's the opposite */
 #define IR_DEBUG     0              /* 1 = send sensor states while line following (blocks the loop
                                        ~30-45 ms per print). The I monitor mode always prints. */
-#define TUNING_KEYS  1              /* 1 = Kp/Kd tuning enabled, 0 = disabled */
+#define TUNING_KEYS  1              /* 1 = Kp/Kd/corner tuning enabled, 0 = disabled */
 
 // PD controller settings (copy your tuned values here when done)
-#define KP_DEFAULT         100.0f //Error correction rate
-#define KD_DEFAULT         0.35f //Damper
-#define CONTROL_PERIOD_MS  10U
+#define KP_DEFAULT         350.0f //Error correction rate
+#define KD_DEFAULT         0.0f   //Damper smooth out correction rate
+#define CONTROL_PERIOD_MS  10U	//IR sensor read and decide every 10 ms
 #define PWM_MAX            999
 
-// Dashed line gap + lost line recovery
-#define GAP_CROSS_MS       200U     // drive straight this long when the line vanishes
-#define RECOVERY_TIMEOUT_MS 2000U
-#define RECOVERY_MIN_SPEED 300
+// Dashed line gap + 90 degree corner
+#define GAP_CROSS_MS       200U     // straight-ahead hold when the line was centred (dashed gap)
+#define CORNER_FWD_MS      280U     // straight-ahead distance before pivoting at a corner (tune: KC<ms>;)
+#define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
+#define RECOVERY_MIN_SPEED 300      // slowest pivot speed
 
 static float kp = KP_DEFAULT;
 static float kd = KD_DEFAULT;
+static uint32_t cornerFwdMs = CORNER_FWD_MS;
 
 static int lastDir = 0;                /* -1 = left; 1 = right; 0 = centred / unknown */
-static uint8_t holdOk = 0;             /* 1 = last motion was straight/gentle, safe to hold across a gap */
+static uint8_t holdOk = 0;             /* 1 = line was centred or on a gentle edge, keep going straight first */
 static uint32_t lostStart = 0;
 static uint8_t recovering = 0;
 
@@ -131,7 +146,7 @@ void lineFollow(int speed)
 
     const char *action = "PD";
 
-    // Any sensor sees the line again: leave recovery
+    // Any sensor sees the line again: leave recovery / corner
     if (l || c || r)
     {
         recovering = 0;
@@ -147,7 +162,7 @@ void lineFollow(int speed)
         action = "CROSSING";
     }
 
-    // All white: dashed gap or lost line
+    // All white: dashed gap, 90 degree corner, or lost line
     else if (!l && !c && !r)
     {
         previousValid = 0;
@@ -158,37 +173,46 @@ void lineFollow(int speed)
             recovering = 1;
         }
 
-        if (holdOk && (now - lostStart) < GAP_CROSS_MS)
+        /* How long to keep going straight before pivoting:
+         *   line was centred             -> short hold (dashed gap)
+         *   line was on a gentle edge    -> corner distance (110 / 011 just before)
+         *   line was lost sideways       -> no hold, pivot right away */
+        uint32_t holdMs = 0;
+        if (holdOk)
+            holdMs = (lastDir == 0) ? GAP_CROSS_MS : cornerFwdMs;
+
+        uint32_t lostMs = now - lostStart;
+
+        if (lostMs < holdMs)
         {
-            // Probably a dashed-line gap: drive straight through it
             forward(speed);
-            action = "GAP - HOLD";
+            action = (lastDir == 0) ? "GAP - HOLD" : "CORNER - FORWARD";
         }
         else if (lastDir == 0)
         {
             stopMotors();
             action = "NO LAST DIRECTION";
         }
-        else if ((now - lostStart) >= RECOVERY_TIMEOUT_MS)
+        else if ((lostMs - holdMs) >= PIVOT_TIMEOUT_MS)
         {
             stopMotors();
-            action = "RECOVERY FAILED";
+            action = "PIVOT FAILED";
         }
         else
         {
-            int recoverySpeed = speed / 2;
-            if (recoverySpeed < RECOVERY_MIN_SPEED)
-                recoverySpeed = RECOVERY_MIN_SPEED;
+            int pivotSpeed = speed / 2;
+            if (pivotSpeed < RECOVERY_MIN_SPEED)
+                pivotSpeed = RECOVERY_MIN_SPEED;
 
             if (lastDir == -1)
             {
-                turnLeft(recoverySpeed);
-                action = "RECOVER LEFT";
+                turnLeft(pivotSpeed);
+                action = "CORNER - PIVOT LEFT";
             }
             else
             {
-                turnRight(recoverySpeed);
-                action = "RECOVER RIGHT";
+                turnRight(pivotSpeed);
+                action = "CORNER - PIVOT RIGHT";
             }
         }
     }
@@ -201,7 +225,7 @@ void lineFollow(int speed)
         action = "AMBIGUOUS - STOP";
     }
 
-    // Retain existing hard-left recovery
+    // Line is off to the left edge: pivot left
     else if (l && !c && !r)
     {
         turnLeft(speed);
@@ -211,7 +235,7 @@ void lineFollow(int speed)
         action = "HARD LEFT";
     }
 
-    // Retain existing hard-right recovery
+    // Line is off to the right edge: pivot right
     else if (!l && !c && r)
     {
         turnRight(speed);
@@ -271,12 +295,13 @@ void lineFollow(int speed)
 }
 
 /* ---------------------------------------------------------------------------
- * Live Kp / Kd entry over Bluetooth
+ * Live tuning over Bluetooth (end each entry with ; or Enter)
  *
- *   T            shows Kp and Kd immediately
- *   KP150;       sets Kp = 150      (end with ; or Enter)
- *   KD0.35;      sets Kd = 0.35     (end with ; or Enter)
- *   K;           shows Kp and Kd
+ *   T            shows Kp, Kd and corner distance immediately
+ *   KP450;       sets Kp = 450
+ *   KD0.35;      sets Kd = 0.35
+ *   KC280;       sets corner straight-ahead distance to 280 ms
+ *   K;           shows the values
  *
  * pidTuneKey() must be the FIRST thing called in handleBtCommand() in main.c.
  * ------------------------------------------------------------------------- */
@@ -284,20 +309,22 @@ void lineFollow(int speed)
 #define ENTRY_TIMEOUT_MS  5000U
 #define KP_MAX            2000.0f
 #define KD_MAX            10.0f
+#define CF_MAX            2000.0f
 
 static uint8_t  entryState = 0;      /* 0 idle, 1 got K, 2 reading value */
-static char     entryTarget = 0;     /* 'P' or 'D' */
+static char     entryTarget = 0;     /* 'P', 'D' or 'C' */
 static char     entryBuf[10];
 static uint8_t  entryLen = 0;
 static uint32_t entryTick = 0;
 
 static void printGains(void)
 {
-    char line[64];
+    char line[80];
     /* print without %f (newlib-nano has no float printf by default) */
     int kdHundredths = (int)(kd * 100.0f + 0.5f);
-    snprintf(line, sizeof(line), "[PD] Kp=%d Kd=%d.%02d\r\n",
-             (int)(kp + 0.5f), kdHundredths / 100, kdHundredths % 100);
+    snprintf(line, sizeof(line), "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu ms\r\n",
+             (int)(kp + 0.5f), kdHundredths / 100, kdHundredths % 100,
+             (unsigned long)cornerFwdMs);
     btPrint(line);
 }
 
@@ -329,7 +356,7 @@ static uint8_t parseValue(const char *s, float *out)
 }
 #endif
 
-/* Returns 1 if the character was consumed by Kp/Kd entry.
+/* Returns 1 if the character was consumed by the tuning entry.
  * With TUNING_KEYS = 0 this always returns 0, so main.c can keep calling it. */
 uint8_t pidTuneKey(char c)
 {
@@ -348,7 +375,7 @@ uint8_t pidTuneKey(char c)
             entryTick = HAL_GetTick();
             return 1;
         }
-        if (c == 'T' || c == 't')          /* show gains instantly */
+        if (c == 'T' || c == 't')          /* show values instantly */
         {
             printGains();
             return 1;
@@ -365,16 +392,17 @@ uint8_t pidTuneKey(char c)
 
     entryTick = HAL_GetTick();
 
-    if (entryState == 1)                       /* after K: expect P or D */
+    if (entryState == 1)                       /* after K: expect P, D or C */
     {
         if (isEnd) { entryState = 0; printGains(); return 1; }
 
         if (c == 'P' || c == 'p')      entryTarget = 'P';
         else if (c == 'D' || c == 'd') entryTarget = 'D';
+        else if (c == 'C' || c == 'c') entryTarget = 'C';
         else
         {
             entryState = 0;
-            btPrint("[PD] Use KP<value>; or KD<value>;\r\n");
+            btPrint("[TUNE] Use KP<n>; KD<n>; or KC<ms>;\r\n");
             return 1;
         }
         entryState = 2;
@@ -390,10 +418,11 @@ uint8_t pidTuneKey(char c)
         entryState = 0;
 
         if (entryLen == 0)               { printGains(); return 1; }
-        if (!parseValue(entryBuf, &v))   { btPrint("[PD] Invalid number\r\n"); return 1; }
+        if (!parseValue(entryBuf, &v))   { btPrint("[TUNE] Invalid number\r\n"); return 1; }
 
-        if (entryTarget == 'P') kp = (v > KP_MAX) ? KP_MAX : v;
-        else                    kd = (v > KD_MAX) ? KD_MAX : v;
+        if (entryTarget == 'P')      kp = (v > KP_MAX) ? KP_MAX : v;
+        else if (entryTarget == 'D') kd = (v > KD_MAX) ? KD_MAX : v;
+        else                         cornerFwdMs = (uint32_t)((v > CF_MAX) ? CF_MAX : v);
 
         printGains();
         return 1;
@@ -407,7 +436,7 @@ uint8_t pidTuneKey(char c)
     else
     {
         entryState = 0;
-        btPrint("[PD] Value too long\r\n");
+        btPrint("[TUNE] Value too long\r\n");
     }
     return 1;
 #else

@@ -9,6 +9,7 @@
 #define INC_COLOUR_H_
 
 #include "main.h"
+#include <stdio.h>
 
 #define TCS34725_I2C_ADDR       (0x29 << 1)
 
