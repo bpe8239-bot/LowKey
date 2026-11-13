@@ -61,12 +61,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "bluetooth.h"
+#include "colour.h"
+#include "line_following.h"
+#include "mission.h"
 #include "motor.h"
 #include "servo_claw.h"
-#include "bluetooth.h"
-#include "line_following.h"
-#include "colour.h"
-#include "mission.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,7 +97,7 @@ UART_HandleTypeDef huart1;
 static char cmd = 'X';
 static int speed = 750;                 /* 0-999 */
 static uint32_t lastCmdTime = 0;
-static uint8_t autoMode = 0;           /* 1 = follow IR line */
+static uint8_t autoMode = 0;           /* 1 = Basic Map Loop; 2 = Line Follow only */
 static uint8_t colourReady = 0;
 
 /* USER CODE END PV */
@@ -115,6 +115,7 @@ static void MX_I2C1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
 //Colour Debug
 #define COLOUR_DEBUG 1
 #define COLOUR_REPORT_MS 500U
@@ -175,6 +176,7 @@ static void handleBtCommand(char c)
 
     if (c == '\r' || c == '\n') return;
 
+    //Set Speed
     if (c >= '1' && c <= '9')
     {
         speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
@@ -183,14 +185,27 @@ static void handleBtCommand(char c)
         btPrint(line);
         return;
     }
-        if (c == 'M' || c == 'm')
-        {
-            autoMode = 1;
-            lineFollowReset();
-            btPrint("[MODE] AUTO LINE FOLLOWING\r\n");
-            return;
-        }
-	if (c == 'X' || c == 'x' || c == ' ') /*Stop motor command*/
+
+    //Basic Map Script Automode
+    if (c == 'M' || c == 'm')
+    {
+    	autoMode = 1;
+    	missionStart();
+    	btPrint("[MODE] MISSION STARTS\r\n");
+    	return;
+    }
+
+    //For Line following testing purpose
+    if (c == 'N' || c == 'n')
+    {
+        autoMode = 2;
+        lineFollowReset();
+        btPrint("[MODE] LINE FOLLOW ONLY\r\n");
+        return;
+    }
+
+    /*Stop motor command*/
+	if (c == 'X' || c == 'x' || c == ' ')
 	{
 		autoMode = 0;
 		cmd = 'X';
@@ -198,19 +213,21 @@ static void handleBtCommand(char c)
 		btPrint("[MOTOR] STOP\r\n");
 		return;
 	}
-	if (c == '?' || c == 'H' || c == 'h') /*List of Command*/
+
+	 /*List of Command*/
+	if (c == '?' || c == 'H' || c == 'h')
 	{
-		btPrint("[HELP] W/S/A/D move; X stop; M auto; 1-9 speed; KP/KD tune; ? help\r\n");
+		btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; N line only; M mission; L sensor log; KP/KD/KC/KJ/KA/KB/KW tune; T show; ? help\r\n");
 		return;
 	}
 
-	if (c == 'F' || c == 'f') /*claw control keybind*/
+	/*claw control keybind*/
+	if (c == 'F' || c == 'f')
 	{
 	    Claw_Open();
 	    btPrint("[CLAW] OPEN\r\n");
 	    return;
 	}
-
 	if (c == 'G' || c == 'g')
 	{
 	    Claw_Close();
@@ -218,6 +235,14 @@ static void handleBtCommand(char c)
 	    return;
 	}
 
+	//Line Logging
+	if (c == 'L' || c == 'l')
+	{
+	    autoMode = 0; cmd = 'X'; stopMotors();
+	    lineLogDump();
+	    return;
+	}
+	//Manual Movement Control
 	if (c == 'W' || c == 'w') motion = "FORWARD";
 	else if (c == 'S' || c == 's') motion = "BACKWARD";
 	else if (c == 'A' || c == 'a') motion = "LEFT";
@@ -231,6 +256,8 @@ static void handleBtCommand(char c)
 		snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
 		btPrint(line);
 	}
+
+	//Undefined keybind
 	else
 	{
 		snprintf(line, sizeof(line), "[ERROR] Unknown command: %c\r\n", c);
@@ -275,10 +302,10 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
-    stopMotors();
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+  stopMotors();
 
     lastCmdTime = HAL_GetTick();
     if (Bluetooth_Start() != HAL_OK)
@@ -318,12 +345,21 @@ int main(void)
     while (btPop(&received))
     {
       handleBtCommand((char)received);
+      lineLogTick();
     }
 
-    if (autoMode)
+    if (autoMode == 1) //Basic Map Loop
+        {
+          if (!missionTick(speed))
+          {
+            autoMode = 0;
+            cmd = 'X';
+            btPrint("[MODE] MANUAL - W/A/S/D drive, F/G claw\r\n");
+          }
+        }
+    else if (autoMode == 2) //Line Following
     {
-      lineFollow(speed);
-      colourDebugTick();
+    	lineFollow(speed);
     }
     else
     {
@@ -342,6 +378,7 @@ int main(void)
         case 'D': case 'd': turnRight(speed); break;
         default: stopMotors(); break;
       }
+      colourDebugTick();
     }
 
   }

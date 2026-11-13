@@ -93,6 +93,7 @@ static uint8_t       branchCount = 0;
 static uint8_t       sawWhite = 0;
 static uint8_t       barSeen = 0;
 static uint32_t      barStart = 0;
+static uint8_t 		 arrivedAligned = 0;
 
 /* time-based backup */
 static uint32_t t1Ms = T1_DEFAULT_MS;
@@ -127,10 +128,11 @@ uint32_t missionGetParam(char id)
 
 static uint8_t finish(void)
 {
-    char line[64];
-    stopMotors();
-    snprintf(line, sizeof(line), "[MISSION] ARRIVED at ball %u - MANUAL MODE\r\n", (unsigned)target);
-    btPrint(line);
+	 char line[96];
+	    stopMotors();
+	    snprintf(line, sizeof(line), "[MISSION] ARRIVED at ball %u (%s) - MANUAL MODE\r\n",
+	             (unsigned)target, arrivedAligned ? "aligned" : "NOT aligned");
+	    btPrint(line);
     active = 0;
     return 0;
 }
@@ -357,7 +359,8 @@ uint8_t missionTick(int speed)
                 if (!barSeen) { barSeen = 1; barStart = now; }
                 if ((now - barStart) >= END_BAR_CONFIRM_MS)
                 {
-                    stopMotors();
+                	arrivedAligned = lineAligned();
+                	stopMotors();
                     nextStep();
                     return 1;
                 }
