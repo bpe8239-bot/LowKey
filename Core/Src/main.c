@@ -121,7 +121,7 @@ static void MX_I2C1_Init(void);
 /* USER CODE BEGIN 0 */
 
 //Colour Debug
-#define COLOUR_DEBUG 1
+#define COLOUR_DEBUG 0
 #define COLOUR_REPORT_MS 500U
 
 static void colourDebugTick(void)
@@ -173,102 +173,150 @@ static void colourDebugTick(void)
 /*Bluetooth Keybind command*/
 static void handleBtCommand(char c)
 {
+    static char rx_buf[32];
+    static uint8_t rx_idx = 0;
     const char *motion = NULL;
     char line[90];
 
-    if (pidTuneKey(c)) return;      /* Kp/Kd entry must come first */
-
-    if (c == '\r' || c == '\n') return;
-
-    //Set Speed
-    if (c >= '1' && c <= '9')
+    // 1. Check for end of line (Enter / Newline sent from phone app)
+    if (c == '\r' || c == '\n')
     {
-        speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
-        lastCmdTime = HAL_GetTick();
-        snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
-        btPrint(line);
+        if (rx_idx == 0) return; // Ignore empty newlines
+        rx_buf[rx_idx] = '\0';   // Null-terminate string
+        rx_idx = 0;              // Reset buffer index for next command
+
+        char prefix = rx_buf[0];
+
+        // --- Status Command ('v' or 'V') ---
+        if (prefix == 'v' || prefix == 'V')
+        {
+            char msg[120];
+            sprintf(msg, "[STATUS] Margin:%.2f | Rmin:%.2f | Gmin:%.2f | Bmin:%.2f | Bmax:%.2f | RGdiff:%.2f\r\n",
+                    tuning_red_margin, tuning_red_min, tuning_green_min, tuning_blue_min, tuning_blue_max, tuning_rg_diff);
+            btPrint(msg);
+            return;
+        }
+
+        // --- Direct Value Tuning (e.g. m0.10, o0.62, r0.40) ---
+        char *endptr = NULL;
+        float val = strtof(&rx_buf[1], &endptr);
+        if (endptr != &rx_buf[1] && *endptr == '\0')
+        {
+            char msg[60];
+            switch (prefix)
+            {
+                case 'm': case 'M':
+                    tuning_red_margin = val;
+                    sprintf(msg, "[TUNE] Red Margin set to %.2f\r\n", tuning_red_margin);
+                    break;
+                case 'r': case 'R':
+                    tuning_red_min = val;
+                    sprintf(msg, "[TUNE] Red Min set to %.2f\r\n", tuning_red_min);
+                    break;
+                case 'g': case 'G':
+                    tuning_green_min = val;
+                    sprintf(msg, "[TUNE] Green Min set to %.2f\r\n", tuning_green_min);
+                    break;
+                case 'b': case 'B':
+                    tuning_blue_min = val;
+                    sprintf(msg, "[TUNE] Blue Min set to %.2f\r\n", tuning_blue_min);
+                    break;
+                case 'o': case 'O':
+                    tuning_blue_max = val;
+                    sprintf(msg, "[TUNE] Blue Max set to %.2f\r\n", tuning_blue_max);
+                    break;
+                case 'p': case 'P':
+                    tuning_rg_diff = val;
+                    sprintf(msg, "[TUNE] RG Diff set to %.2f\r\n", tuning_rg_diff);
+                    break;
+                default:
+                    btPrint("[ERR] Unknown letter prefix\r\n");
+                    return;
+            }
+            btPrint(msg);
+            return;
+        }
+
+        btPrint("[ERR] Format error. Use letter + value (e.g., m0.10, o0.62)\r\n");
         return;
     }
 
-    //Basic Map Script Automode
-    if (c == 'M' || c == 'm')
+    // 2. Accumulate normal characters into buffer until newline arrives
+    if (rx_idx < sizeof(rx_buf) - 1)
     {
-    	autoMode = 1;
-    	missionStart();
-    	btPrint("[MODE] MISSION STARTS\r\n");
-    	return;
+        rx_buf[rx_idx++] = c;
     }
-
-    //For Line following testing purpose
-    if (c == 'N' || c == 'n')
+    else
     {
-        autoMode = 2;
-        lineFollowReset();
-        btPrint("[MODE] LINE FOLLOW ONLY\r\n");
+        rx_idx = 0; // Overflow safety reset
+        btPrint("[ERR] Command string too long\r\n");
         return;
     }
 
-    /*Stop motor command*/
-	if (c == 'X' || c == 'x' || c == ' ')
-	{
-		autoMode = 0;
-		cmd = 'X';
-		stopMotors();
-		btPrint("[MOTOR] STOP\r\n");
-		return;
-	}
+    // 3. Instant Single-Character Commands (ONLY when rx_idx == 1 and NOT a multi-char prefix)
+    if (rx_idx == 1)
+    {
+        if (pidTuneKey(c)) { rx_idx = 0; return; }
 
-	 /*List of Command*/
-	if (c == '?' || c == 'H' || c == 'h')
-	{
-		btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; N line only; M mission; L sensor log; KP/KD/KC/KJ/KA/KB/KW tune; T show; ? help\r\n");
-		return;
-	}
+        if (c >= '1' && c <= '9')
+        {
+            speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
+            lastCmdTime = HAL_GetTick();
+            snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
+            btPrint(line);
+            rx_idx = 0;
+            return;
+        }
+        // Uppercase 'M' = Auto Mode; Lowercase 'm' stays in rx_buf for Red Margin tuning
+        if (c == 'M') { autoMode = 1; lineFollowReset(); btPrint("[MODE] AUTO LINE FOLLOWING\r\n"); rx_idx = 0; return; }
+        if (c == 'I' || c == 'i') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MODE] IR MONITOR\r\n"); rx_idx = 0; return; }
+        if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); rx_idx = 0; return; }
+        if (c == 'c' || c == 'C') { ColourSensor_CalibrateWhite(); btPrint("[CAL] White Calibrated\r\n"); rx_idx = 0; return; }
+        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; m/r/g/b/o/p+val tune; v status\r\n"); rx_idx = 0; return; }
+        if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); rx_idx = 0; return; }
+        // Uppercase 'G' = Claw Close; Lowercase 'g' stays in rx_buf for Green Min tuning
+        if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); rx_idx = 0; return; }
 
-	/*claw control keybind*/
-	if (c == 'F' || c == 'f')
-	{
-	    Claw_Open();
-	    btPrint("[CLAW] OPEN\r\n");
-	    return;
-	}
-	if (c == 'G' || c == 'g')
-	{
-	    Claw_Close();
-	    btPrint("[CLAW] CLOSE\r\n");
-	    return;
-	}
+        // Debug Color Test ('z' / 'Z')
+        if (c == 'z' || c == 'Z')
+        {
+            ColourData_t raw;
+            if (ColourSensor_ReadRaw(&raw) == HAL_OK)
+            {
+                float rR = (raw.c > 0) ? (float)raw.r / raw.c : 0;
+                float gR = (raw.c > 0) ? (float)raw.g / raw.c : 0;
+                float bR = (raw.c > 0) ? (float)raw.b / raw.c : 0;
+                char msg[80];
+                sprintf(msg, "[RATIOS] R:%.2f G:%.2f B:%.2f C:%u\r\n", rR, gR, bR, raw.c);
+                btPrint(msg);
 
-	//Line Logging
-	if (c == 'L' || c == 'l')
-	{
-	    autoMode = 0; cmd = 'X'; stopMotors();
-	    lineLogDump();
-	    return;
-	}
-	//Manual Movement Control
-	if (c == 'W' || c == 'w') motion = "FORWARD";
-	else if (c == 'S' || c == 's') motion = "BACKWARD";
-	else if (c == 'A' || c == 'a') motion = "LEFT";
-	else if (c == 'D' || c == 'd') motion = "RIGHT";
+                DetectedColour_t det = ColourSensor_GetColour();
+                if (det == COLOUR_RED) btPrint("-> RED\r\n");
+                else if (det == COLOUR_GREEN) btPrint("-> GREEN\r\n");
+                else if (det == COLOUR_BLUE) btPrint("-> BLUE\r\n");
+                else btPrint("-> UNKNOWN\r\n");
+            }
+            rx_idx = 0;
+            return;
+        }
 
-	if (motion != NULL)
-	{
-		autoMode = 0;
-		cmd = c;
-		lastCmdTime = HAL_GetTick();
-		snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
-		btPrint(line);
-	}
+        // Movement (W/A/S/D) - executes immediately on keystroke
+        if (c == 'W' || c == 'w') motion = "FORWARD";
+        else if (c == 'S' || c == 's') motion = "BACKWARD";
+        else if (c == 'A' || c == 'a') motion = "LEFT";
+        else if (c == 'D' || c == 'd') motion = "RIGHT";
 
-	//Undefined keybind
-	else
-	{
-		snprintf(line, sizeof(line), "[ERROR] Unknown command: %c\r\n", c);
-		btPrint(line);
-	}
-	}
-
+        if (motion != NULL)
+        {
+            autoMode = 0;
+            cmd = c;
+            lastCmdTime = HAL_GetTick();
+            snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
+            btPrint(line);
+            rx_idx = 0;
+        }
+    }
+}
 /* USER CODE END 0 */
 
 /**
