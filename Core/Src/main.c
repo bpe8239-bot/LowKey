@@ -34,6 +34,7 @@
  *   W = forward     S = backward     A = turn left     D = turn right
  *   X or SPACE = stop
  *   1-9 = speed (1 slowest, 9 fastest)
+ *   I = IR sensor monitor (motors stopped), M = automatic line following
  *   ? = show help. Manual movement times out after 1 seconds without a new command.
  */
 /**
@@ -61,12 +62,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "bluetooth.h"
-#include "colour.h"
-#include "line_following.h"
-#include "mission.h"
 #include "motor.h"
 #include "servo_claw.h"
+#include "bluetooth.h"
+#include "line_following.h"
+#include "colour.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,8 +97,8 @@ UART_HandleTypeDef huart1;
 static char cmd = 'X';
 static int speed = 750;                 /* 0-999 */
 static uint32_t lastCmdTime = 0;
-static uint8_t autoMode = 0;           /* 1 = Basic Map Loop; 2 = Line Follow only */
-static uint8_t colourReady = 0;
+static uint8_t autoMode = 0;           /* 1 = follow IR line */
+static uint8_t sensorOnly = 0;         /* 1 = IR monitor; motors stopped */
 
 /* USER CODE END PV */
 
@@ -116,155 +116,155 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-//Colour Debug
-#define COLOUR_DEBUG 1
-#define COLOUR_REPORT_MS 500U
-
-static void colourDebugTick(void)
-{
-#if COLOUR_DEBUG
-    static uint32_t lastReport = 0;
-    uint32_t now = HAL_GetTick();
-
-    if (!colourReady) return;
-
-    if ((now - lastReport) < COLOUR_REPORT_MS)
-        return;
-
-    lastReport = now;
-
-    ColourData_t raw;
-
-    if (ColourSensor_ReadRaw(&raw) != HAL_OK)
-    {
-        btPrint("[COLOUR] READ ERROR\r\n");
-        return;
-    }
-
-    DetectedColour_t detected = ColourSensor_GetColour();
-
-    const char *name = "UNKNOWN";
-
-    if (detected == COLOUR_RED)
-        name = "RED";
-    else if (detected == COLOUR_GREEN)
-        name = "GREEN";
-    else if (detected == COLOUR_BLUE)
-        name = "BLUE";
-
-    char msg[100];
-
-    snprintf(msg, sizeof(msg),
-             "[COLOUR] R:%u G:%u B:%u C:%u | %s\r\n",
-             (unsigned)raw.r,
-             (unsigned)raw.g,
-             (unsigned)raw.b,
-             (unsigned)raw.c,
-             name);
-
-    btPrint(msg);
-#endif
-}
-
-/*Bluetooth Keybind command*/
+/* Bluetooth Command Handler with Line Buffering for Direct Values */
+/* Bluetooth Command Handler with Line Buffering for Direct Values */
 static void handleBtCommand(char c)
 {
+    static char rx_buf[32];
+    static uint8_t rx_idx = 0;
     const char *motion = NULL;
     char line[90];
 
-    if (pidTuneKey(c)) return;      /* Kp/Kd entry must come first */
-
-    if (c == '\r' || c == '\n') return;
-
-    //Set Speed
-    if (c >= '1' && c <= '9')
+    // 1. Check for end of line (Enter / Newline sent from phone app)
+    if (c == '\r' || c == '\n')
     {
-        speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
-        lastCmdTime = HAL_GetTick();
-        snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
-        btPrint(line);
+        if (rx_idx == 0) return; // Ignore empty newlines
+        rx_buf[rx_idx] = '\0';   // Null-terminate string
+        rx_idx = 0;              // Reset buffer index for next command
+
+        char prefix = rx_buf[0];
+
+        // --- Status Command ('v' or 'V') ---
+        if (prefix == 'v' || prefix == 'V')
+        {
+            char msg[120];
+            sprintf(msg, "[STATUS] Margin:%.2f | Rmin:%.2f | Gmin:%.2f | Bmin:%.2f | Bmax:%.2f | RGdiff:%.2f\r\n",
+                    tuning_red_margin, tuning_red_min, tuning_green_min, tuning_blue_min, tuning_blue_max, tuning_rg_diff);
+            btPrint(msg);
+            return;
+        }
+
+        // --- Direct Value Tuning (e.g. m0.10, o0.62, r0.40) ---
+        char *endptr = NULL;
+        float val = strtof(&rx_buf[1], &endptr);
+        if (endptr != &rx_buf[1] && *endptr == '\0')
+        {
+            char msg[60];
+            switch (prefix)
+            {
+                case 'm': case 'M':
+                    tuning_red_margin = val;
+                    sprintf(msg, "[TUNE] Red Margin set to %.2f\r\n", tuning_red_margin);
+                    break;
+                case 'r': case 'R':
+                    tuning_red_min = val;
+                    sprintf(msg, "[TUNE] Red Min set to %.2f\r\n", tuning_red_min);
+                    break;
+                case 'g': case 'G':
+                    tuning_green_min = val;
+                    sprintf(msg, "[TUNE] Green Min set to %.2f\r\n", tuning_green_min);
+                    break;
+                case 'b': case 'B':
+                    tuning_blue_min = val;
+                    sprintf(msg, "[TUNE] Blue Min set to %.2f\r\n", tuning_blue_min);
+                    break;
+                case 'o': case 'O':
+                    tuning_blue_max = val;
+                    sprintf(msg, "[TUNE] Blue Max set to %.2f\r\n", tuning_blue_max);
+                    break;
+                case 'p': case 'P':
+                    tuning_rg_diff = val;
+                    sprintf(msg, "[TUNE] RG Diff set to %.2f\r\n", tuning_rg_diff);
+                    break;
+                default:
+                    btPrint("[ERR] Unknown letter prefix\r\n");
+                    return;
+            }
+            btPrint(msg);
+            return;
+        }
+
+        btPrint("[ERR] Format error. Use letter + value (e.g., m0.10, o0.62)\r\n");
         return;
     }
 
-    //Basic Map Script Automode
-    if (c == 'M' || c == 'm')
+    // 2. Accumulate normal characters into buffer until newline arrives
+    if (rx_idx < sizeof(rx_buf) - 1)
     {
-    	autoMode = 1;
-    	missionStart();
-    	btPrint("[MODE] MISSION STARTS\r\n");
-    	return;
+        rx_buf[rx_idx++] = c;
     }
-
-    //For Line following testing purpose
-    if (c == 'N' || c == 'n')
+    else
     {
-        autoMode = 2;
-        lineFollowReset();
-        btPrint("[MODE] LINE FOLLOW ONLY\r\n");
+        rx_idx = 0; // Overflow safety reset
+        btPrint("[ERR] Command string too long\r\n");
         return;
     }
 
-    /*Stop motor command*/
-	if (c == 'X' || c == 'x' || c == ' ')
-	{
-		autoMode = 0;
-		cmd = 'X';
-		stopMotors();
-		btPrint("[MOTOR] STOP\r\n");
-		return;
-	}
+    // 3. Instant Single-Character Commands (ONLY when rx_idx == 1 and NOT a multi-char prefix)
+    if (rx_idx == 1)
+    {
+        if (pidTuneKey(c)) { rx_idx = 0; return; }
 
-	 /*List of Command*/
-	if (c == '?' || c == 'H' || c == 'h')
-	{
-		btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; N line only; M mission; L sensor log; KP/KD/KC/KJ/KA/KB/KW tune; T show; ? help\r\n");
-		return;
-	}
+        if (c >= '1' && c <= '9')
+        {
+            speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
+            lastCmdTime = HAL_GetTick();
+            snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
+            btPrint(line);
+            rx_idx = 0;
+            return;
+        }
+        // Uppercase 'M' = Auto Mode; Lowercase 'm' stays in rx_buf for Red Margin tuning
+        if (c == 'M') { autoMode = 1; sensorOnly = 0; lineFollowReset(); btPrint("[MODE] AUTO LINE FOLLOWING\r\n"); rx_idx = 0; return; }
+        if (c == 'I' || c == 'i') { autoMode = 0; sensorOnly = 1; cmd = 'X'; stopMotors(); btPrint("[MODE] IR MONITOR\r\n"); rx_idx = 0; return; }
+        if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; sensorOnly = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); rx_idx = 0; return; }
+        if (c == 'c' || c == 'C') { ColourSensor_CalibrateWhite(); btPrint("[CAL] White Calibrated\r\n"); rx_idx = 0; return; }
+        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; m/r/g/b/o/p+val tune; v status\r\n"); rx_idx = 0; return; }
+        if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); rx_idx = 0; return; }
+        // Uppercase 'G' = Claw Close; Lowercase 'g' stays in rx_buf for Green Min tuning
+        if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); rx_idx = 0; return; }
 
-	/*claw control keybind*/
-	if (c == 'F' || c == 'f')
-	{
-	    Claw_Open();
-	    btPrint("[CLAW] OPEN\r\n");
-	    return;
-	}
-	if (c == 'G' || c == 'g')
-	{
-	    Claw_Close();
-	    btPrint("[CLAW] CLOSE\r\n");
-	    return;
-	}
+        // Debug Color Test ('z' / 'Z')
+        if (c == 'z' || c == 'Z')
+        {
+            ColourData_t raw;
+            if (ColourSensor_ReadRaw(&raw) == HAL_OK)
+            {
+                float rR = (raw.c > 0) ? (float)raw.r / raw.c : 0;
+                float gR = (raw.c > 0) ? (float)raw.g / raw.c : 0;
+                float bR = (raw.c > 0) ? (float)raw.b / raw.c : 0;
+                char msg[80];
+                sprintf(msg, "[RATIOS] R:%.2f G:%.2f B:%.2f C:%u\r\n", rR, gR, bR, raw.c);
+                btPrint(msg);
 
-	//Line Logging
-	if (c == 'L' || c == 'l')
-	{
-	    autoMode = 0; cmd = 'X'; stopMotors();
-	    lineLogDump();
-	    return;
-	}
-	//Manual Movement Control
-	if (c == 'W' || c == 'w') motion = "FORWARD";
-	else if (c == 'S' || c == 's') motion = "BACKWARD";
-	else if (c == 'A' || c == 'a') motion = "LEFT";
-	else if (c == 'D' || c == 'd') motion = "RIGHT";
+                DetectedColour_t det = ColourSensor_GetColour();
+                if (det == COLOUR_RED) btPrint("-> RED\r\n");
+                else if (det == COLOUR_GREEN) btPrint("-> GREEN\r\n");
+                else if (det == COLOUR_BLUE) btPrint("-> BLUE\r\n");
+                else btPrint("-> UNKNOWN\r\n");
+            }
+            rx_idx = 0;
+            return;
+        }
 
-	if (motion != NULL)
-	{
-		autoMode = 0;
-		cmd = c;
-		lastCmdTime = HAL_GetTick();
-		snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
-		btPrint(line);
-	}
+        // Movement (W/A/S/D) - executes immediately on keystroke
+        if (c == 'W' || c == 'w') motion = "FORWARD";
+        else if (c == 'S' || c == 's') motion = "BACKWARD";
+        else if (c == 'A' || c == 'a') motion = "LEFT";
+        else if (c == 'D' || c == 'd') motion = "RIGHT";
 
-	//Undefined keybind
-	else
-	{
-		snprintf(line, sizeof(line), "[ERROR] Unknown command: %c\r\n", c);
-		btPrint(line);
-	}
-	}
-
+        if (motion != NULL)
+        {
+            autoMode = 0;
+            sensorOnly = 0;
+            cmd = c;
+            lastCmdTime = HAL_GetTick();
+            snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
+            btPrint(line);
+            rx_idx = 0;
+        }
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -302,10 +302,10 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
-  stopMotors();
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+    stopMotors();
 
     lastCmdTime = HAL_GetTick();
     if (Bluetooth_Start() != HAL_OK)
@@ -316,22 +316,20 @@ int main(void)
     /* start listening to Bluetooth */
   btPrint("[STM32] Ready. Send ? for help.\r\n");
 
-  	//Claw
     if (Claw_Init(&htim3) != HAL_OK)
     {
         Error_Handler();
     }
 
-    //Colour Sensor
-    if (ColourSensor_Init(&hi2c1) == HAL_OK)
-    {
-        colourReady = 1;
-        btPrint("[COLOUR] INIT OK\r\n");
-    }
-    else
-    {
-        btPrint("[COLOUR] INIT FAILED\r\n");
-    }
+    if (ColourSensor_Init(&hi2c1) != HAL_OK)
+      {
+          btPrint("[ERROR] Colour Sensor Init Failed!\r\n");
+          Error_Handler();
+      }
+      else
+      {
+          btPrint("[INFO] Colour Sensor Initialized Successfully.\r\n");
+      }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -342,24 +340,21 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     uint8_t received;
+
+
+
     while (btPop(&received))
     {
       handleBtCommand((char)received);
-      lineLogTick();
     }
 
-    if (autoMode == 1) //Basic Map Loop
-        {
-          if (!missionTick(speed))
-          {
-            autoMode = 0;
-            cmd = 'X';
-            btPrint("[MODE] MANUAL - W/A/S/D drive, F/G claw\r\n");
-          }
-        }
-    else if (autoMode == 2) //Line Following
+    if (autoMode)
     {
-    	lineFollow(speed);
+      lineFollow(speed);
+    }
+    else if (sensorOnly)
+    {
+      //monitorIR();
     }
     else
     {
@@ -378,7 +373,6 @@ int main(void)
         case 'D': case 'd': turnRight(speed); break;
         default: stopMotors(); break;
       }
-      colourDebugTick();
     }
 
   }
@@ -618,10 +612,8 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  /*Configure GPIO pins : PB11 PB12 PB13 PB14
-                           PB15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
-                          |GPIO_PIN_15;
+  /*Configure GPIO pins : PB12 PB13 PB14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
