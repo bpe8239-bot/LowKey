@@ -48,6 +48,9 @@
 
 #define OUTER_JUNCTION_ONLY 1       /* 1 = S0/S4 never steer, PD uses S1-S3
                                        0 = all five sensors steer (assumes equal sensor spacing) */
+//Rear IR sensor
+#define REAR_IR_PORT       GPIOB
+#define REAR_IR_PIN        GPIO_PIN_10
 
 // PD controller settings (copy your tuned values here when done)
 #if OUTER_JUNCTION_ONLY
@@ -146,6 +149,18 @@ uint8_t lineReadBits(void)
             bits |= (uint8_t)(1U << i);
     }
     return bits;
+}
+
+//Rear sensor (1 = sees the line)
+uint8_t lineReadRear(void)
+{
+    return irRead(REAR_IR_PORT, REAR_IR_PIN);
+}
+
+//Front centre sensor AND rear sensor both on the line = the robot is lined up with it
+uint8_t lineAligned(void)
+{
+    return (irRead(irPin[2].port, irPin[2].pin) && irRead(REAR_IR_PORT, REAR_IR_PIN)) ? 1U : 0U;
 }
 
 // Returns and clears the pending side-bar event
