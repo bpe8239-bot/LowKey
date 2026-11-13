@@ -28,8 +28,16 @@ typedef struct {
     uint16_t c;
 } ColourData_t;
 
+extern float tuning_red_margin;
+extern float tuning_red_min;
+extern float tuning_green_min;
+extern float tuning_blue_min;
+extern float tuning_blue_max;
+extern float tuning_rg_diff;
+
 HAL_StatusTypeDef ColourSensor_Init(I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef ColourSensor_ReadRaw(ColourData_t *data);
 DetectedColour_t  ColourSensor_GetColour(void);
+void ColourSensor_CalibrateWhite(void);
 
 #endif /* INC_COLOUR_H_ */

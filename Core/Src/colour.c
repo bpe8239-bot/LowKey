@@ -31,6 +31,14 @@
 
 static I2C_HandleTypeDef *tcs_hi2c = NULL;
 
+/* Adjustable Thresholds for Live Tuning */
+float tuning_red_margin = 0.18f;
+float tuning_red_min = 0.40f;
+float tuning_green_min = 0.35f;
+float tuning_blue_min = 0.20f;
+float tuning_blue_max = 0.42f;
+float tuning_rg_diff = 0.05f;
+
 /**
  * @brief  Helper function to write a byte to a TCS34725 register
  */
@@ -103,6 +111,40 @@ HAL_StatusTypeDef ColourSensor_ReadRaw(ColourData_t *data)
     return HAL_OK;
 }
 
+/* Calibration scale factors (defaults to 1.0 uncalibrated) */
+static float ref_r_scale = 1.0f;
+static float ref_g_scale = 1.0f;
+static float ref_b_scale = 1.0f;
+
+/**
+ * @brief  Captures current white surface values to normalize future readings
+ */
+void ColourSensor_CalibrateWhite(void)
+{
+    ColourData_t raw;
+    if (ColourSensor_ReadRaw(&raw) != HAL_OK)
+    {
+        btPrint("Calib Failed: Read Error\r\n");
+        return;
+    }
+
+    if (raw.c < 100)
+    {
+        btPrint("Calib Failed: Too dark! Move closer to white card.\r\n");
+        return;
+    }
+
+    // Compute multipliers to balance R, G, and B equally on the white reference card
+    float avg = (float)(raw.r + raw.g + raw.b) / 3.0f;
+    ref_r_scale = (raw.r > 0) ? (avg / (float)raw.r) : 1.0f;
+    ref_g_scale = (raw.g > 0) ? (avg / (float)raw.g) : 1.0f;
+    ref_b_scale = (raw.b > 0) ? (avg / (float)raw.b) : 1.0f;
+
+    char msg[64];
+    sprintf(msg, "Calibrated! R:%.2f G:%.2f B:%.2f\r\n", ref_r_scale, ref_g_scale, ref_b_scale);
+    btPrint(msg);
+}
+
 /**
  * @brief  Internal helper to evaluate a single instant reading
  */
@@ -123,18 +165,18 @@ static DetectedColour_t evaluateSingleSample(void)
     float gRatio = (float)raw.g / (float)raw.c;
     float bRatio = (float)raw.b / (float)raw.c;
 
-    // Red: Red dominant and well above green
-    if (rRatio > (gRatio + 0.18f) && rRatio > bRatio && rRatio > 0.40f)
+    // Red check using tuning variables
+    if (rRatio > (gRatio + tuning_red_margin) && rRatio > bRatio && rRatio > tuning_red_min)
     {
         return COLOUR_RED;
     }
-    // Green: Green dominant over red
-    else if (gRatio > rRatio && gRatio > bRatio && gRatio > 0.35f)
+    // Green check using tuning variables
+    else if (gRatio > rRatio && gRatio > bRatio && gRatio > tuning_green_min)
     {
         return COLOUR_GREEN;
     }
-    // Blue: Uses fabsf() for proper float comparison, and upper clear limit to ignore white floors
-    else if (bRatio >= 0.20f && bRatio <= 0.35f && fabsf(rRatio - gRatio) <= 0.05f && raw.c > 100 && raw.c < 500)
+    // Blue check using tuning variables
+    else if (bRatio >= tuning_blue_min && bRatio <= tuning_blue_max && fabsf(rRatio - gRatio) <= tuning_rg_diff && raw.c > 90 && raw.c < 500)
     {
         return COLOUR_BLUE;
     }
