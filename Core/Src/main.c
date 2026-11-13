@@ -268,14 +268,14 @@ static void handleBtCommand(char c)
             return;
         }
         // Uppercase 'M' = Auto Mode; Lowercase 'm' stays in rx_buf for Red Margin tuning
-        if (c == 'M') { autoMode = 1; lineFollowReset(); btPrint("[MODE] AUTO LINE FOLLOWING\r\n"); rx_idx = 0; return; }
-        if (c == 'I' || c == 'i') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MODE] IR MONITOR\r\n"); rx_idx = 0; return; }
+        if (c == 'M') { autoMode = 1; missionStart(); btPrint("[MODE] MISSION STARTS\r\n"); rx_idx = 0; return; }
+        if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); rx_idx = 0; return; }
         if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); rx_idx = 0; return; }
         if (c == 'c' || c == 'C') { ColourSensor_CalibrateWhite(); btPrint("[CAL] White Calibrated\r\n"); rx_idx = 0; return; }
         if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; m/r/g/b/o/p+val tune; v status\r\n"); rx_idx = 0; return; }
         if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); rx_idx = 0; return; }
-        // Uppercase 'G' = Claw Close; Lowercase 'g' stays in rx_buf for Green Min tuning
         if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); rx_idx = 0; return; }
+        if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); rx_idx = 0; return; }
 
         // Debug Color Test ('z' / 'Z')
         if (c == 'z' || c == 'Z')
