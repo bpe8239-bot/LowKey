@@ -38,7 +38,23 @@
  *   N = Line Following ONLY
  *   L = Line Logging
  *   M = Basic Map Loop
- *   T = Show KP KD value
+ *   T/K = Show KP KD value
+ *
+ *   --------------------------Tuning Keys-------------------------------------------
+ *  	Junction counting (primary method)
+ *  KC	=  Straight-ahead time at a corner before pivoting
+ *  KJ	=  Straight-ahead time after counting the target branch,
+ *  	   before pivoting into it
+ *  KC and KJ are timed straight-ahead drives, so they’re technically time-based.
+ *  They sit in this group because the junction-counting method needs them,
+ *  whether or not the backup is enabled.
+ *
+ *  	Time-based (backup for the counting)
+ *  KA	=  Expected time from the end of the 2nd corner to the first branch bar
+ *  KB	=  Expected time between branch bars
+ *  KW	=  ± window around each expected time
+ *
+ *
  */
 /**
   ******************************************************************************
@@ -272,7 +288,7 @@ static void handleBtCommand(char c)
         if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); rx_idx = 0; return; }
         if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); rx_idx = 0; return; }
         if (c == 'c' || c == 'C') { ColourSensor_CalibrateWhite(); btPrint("[CAL] White Calibrated\r\n"); rx_idx = 0; return; }
-        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; m/r/g/b/o/p+val tune; v status\r\n"); rx_idx = 0; return; }
+        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; N line only; M mission; L log; KP/KD/KC/KJ/KA/KB/KW tune; T show; F/G claw; m/r/g/b/o/p+val tune; v status\r\n"); rx_idx = 0; return; }
         if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); rx_idx = 0; return; }
         if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); rx_idx = 0; return; }
         if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); rx_idx = 0; return; }

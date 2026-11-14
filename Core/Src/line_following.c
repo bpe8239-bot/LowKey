@@ -81,7 +81,7 @@
 #define BRANCH_FWD_MS      650U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
 
 // Pattern logger
-#define LOG_SIZE           160U     // entries kept (newest overwrite the oldest)
+#define LOG_SIZE           300U     // entries kept (newest overwrite the oldest)
 #define LOG_STABLE_MS      5U       // a pattern must hold this long to be recorded (filters flicker)
 
 typedef struct
