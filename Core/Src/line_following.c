@@ -68,7 +68,7 @@
 #define GAP_CROSS_MS       500U     // straight-ahead hold when the line was centred (dashed gap)
 #define CORNER_FWD_MS      100U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
-#define RECOVERY_MIN_SPEED 300      // slowest pivot speed
+#define RECOVERY_MIN_SPEED 260      // slowest pivot speed
 
 // Side bars (branches / corners)
 #define BAR_LOCKOUT_MS     250U     // ignore a new bar event this soon after the last one
@@ -463,7 +463,7 @@ void lineFollow(int speed)
                 }
                 else
                 {
-                    int pivotSpeed = speed * 0.7;
+                    int pivotSpeed = speed / 2;
                     if (pivotSpeed < RECOVERY_MIN_SPEED)
                         pivotSpeed = RECOVERY_MIN_SPEED;
 

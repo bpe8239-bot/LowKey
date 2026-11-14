@@ -56,6 +56,7 @@ typedef enum
     ST_FOLLOW_CORNERS = 0,
     ST_BRANCH,
     ST_END_BAR,
+    ST_STOP_CORNER,
     ST_FINISH
 } StepType_t;
 
@@ -167,6 +168,10 @@ static void startStep(void)
             lastWasReal = 0;
             tsEst = tsMs;
             break;
+
+        case ST_STOP_CORNER:
+                    (void)lineBarEvent();
+                    break;
 
         case ST_END_BAR:
             barSeen = 0;
@@ -341,7 +346,7 @@ uint8_t missionTick(int speed)
                 case BR_PIVOT:
                 default:
                 {
-                    int pivotSpeed = speed * 0.7;
+                    int pivotSpeed = speed / 2;
                     if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
 
                     if (s->side < 0) turnLeft(pivotSpeed);
@@ -362,6 +367,25 @@ uint8_t missionTick(int speed)
                 }
             }
         }
+        case ST_STOP_CORNER:
+                {
+                    const int8_t ev = lineBarEvent();
+
+                    /* Stop if a left/right corner bar (-1 or +1) OR a wide bar (S0+S2+S4) is seen */
+                    if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS)
+                    {
+                        arrivedAligned = lineAligned();
+                        stopMotors();
+                        nextStep();
+                        return 1;
+                    }
+
+                    if ((now - stateStart) >= END_BAR_TIMEOUT_MS)
+                        return fail("[MISSION] FAILED - corner after branch not found\r\n");
+
+                    lineFollow(speed);
+                    return 1;
+                }
 
         /* ------------------------------------------------------------------ */
         case ST_END_BAR:
@@ -389,6 +413,7 @@ uint8_t missionTick(int speed)
             lineFollow(speed);
             return 1;
         }
+
 
         /* ------------------------------------------------------------------ */
         case ST_FINISH:

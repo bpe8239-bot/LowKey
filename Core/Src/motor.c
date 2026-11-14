@@ -7,7 +7,7 @@
 #include <main.h>
 #include "motor.h"
 
-#define PWM_MAX            999
+#define PWM_MAX            700
 #define LEFT_INVERT        0     /* 1 = flip left motor direction  */
 #define RIGHT_INVERT       1     /* 1 = flip right motor direction */
 
