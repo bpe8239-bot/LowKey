@@ -670,11 +670,6 @@ uint8_t pidTuneKey(char c)
             entryTick = HAL_GetTick();
             return 1;
         }
-        if (c == 'T' || c == 't')          /* show values instantly */
-        {
-            printGains();
-            return 1;
-        }
         return 0;
     }
 

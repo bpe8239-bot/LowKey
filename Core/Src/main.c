@@ -175,6 +175,7 @@ static void handleBtCommand(char c)
 {
     static char rx_buf[32];
     static uint8_t rx_idx = 0;
+    static uint8_t debugMode = 0; // 0 = OFF (Locked), 1 = ON (Unlocked)
     const char *motion = NULL;
     char line[90];
 
@@ -184,6 +185,13 @@ static void handleBtCommand(char c)
         if (rx_idx == 0) return; // Ignore empty newlines
         rx_buf[rx_idx] = '\0';   // Null-terminate string
         rx_idx = 0;              // Reset buffer index for next command
+
+        // Block multi-character tuning/status commands if Debug Mode is OFF
+        if (!debugMode)
+        {
+            btPrint("[LOCKED] Send 'T' to enable Debug Mode first\r\n");
+            return;
+        }
 
         char prefix = rx_buf[0];
 
@@ -253,11 +261,71 @@ static void handleBtCommand(char c)
         return;
     }
 
-    // 3. Instant Single-Character Commands (ONLY when rx_idx == 1 and NOT a multi-char prefix)
+    // 3. Instant Single-Character Commands
     if (rx_idx == 1)
     {
-        if (pidTuneKey(c)) { rx_idx = 0; return; }
+        // --- Explicit Debug Mode Control ('T' = ON, 't' = OFF) ---
+        if (c == 'T')
+        {
+            debugMode = 1;
+            btPrint("[DEBUG] ON - PID & Colour tuning unlocked\r\n");
+            rx_idx = 0;
+            return;
+        }
+        if (c == 't')
+        {
+            debugMode = 0;
+            btPrint("[DEBUG] OFF - Tuning locked\r\n");
+            rx_idx = 0;
+            return;
+        }
 
+        // --- Debug-Only Single-Char Commands (PID Tuning, Color Cal, Color Test) ---
+        if (debugMode)
+        {
+            if (pidTuneKey(c)) { rx_idx = 0; return; }
+
+            if (c == 'c' || c == 'C')
+            {
+                ColourSensor_CalibrateWhite();
+                btPrint("[CAL] White Calibrated\r\n");
+                rx_idx = 0;
+                return;
+            }
+
+            if (c == 'z' || c == 'Z')
+            {
+                ColourData_t raw;
+                if (ColourSensor_ReadRaw(&raw) == HAL_OK)
+                {
+                    float rR = (raw.c > 0) ? (float)raw.r / raw.c : 0;
+                    float gR = (raw.c > 0) ? (float)raw.g / raw.c : 0;
+                    float bR = (raw.c > 0) ? (float)raw.b / raw.c : 0;
+                    char msg[80];
+                    sprintf(msg, "[RATIOS] R:%.2f G:%.2f B:%.2f C:%u\r\n", rR, gR, bR, raw.c);
+                    btPrint(msg);
+
+                    DetectedColour_t det = ColourSensor_GetColour();
+                    if (det == COLOUR_RED) btPrint("-> RED\r\n");
+                    else if (det == COLOUR_GREEN) btPrint("-> GREEN\r\n");
+                    else if (det == COLOUR_BLUE) btPrint("-> BLUE\r\n");
+                    else btPrint("-> UNKNOWN\r\n");
+                }
+                rx_idx = 0;
+                return;
+            }
+        }
+        else
+        {
+            if (c == 'c' || c == 'C' || c == 'z' || c == 'Z')
+            {
+                btPrint("[LOCKED] Send 'T' to enable Debug Mode\r\n");
+                rx_idx = 0;
+                return;
+            }
+        }
+
+        // --- Standard Driving & Mission Commands (Always Available) ---
         if (c >= '1' && c <= '9')
         {
             speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
@@ -267,38 +335,13 @@ static void handleBtCommand(char c)
             rx_idx = 0;
             return;
         }
-        // Uppercase 'M' = Auto Mode; Lowercase 'm' stays in rx_buf for Red Margin tuning
         if (c == 'M') { autoMode = 1; missionStart(); btPrint("[MODE] MISSION STARTS\r\n"); rx_idx = 0; return; }
         if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); rx_idx = 0; return; }
         if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); rx_idx = 0; return; }
-        if (c == 'c' || c == 'C') { ColourSensor_CalibrateWhite(); btPrint("[CAL] White Calibrated\r\n"); rx_idx = 0; return; }
-        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; m/r/g/b/o/p+val tune; v status\r\n"); rx_idx = 0; return; }
+        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; T/t debug on/off; (Debug: m/r/g/b/o/p+val, v, c, z)\r\n"); rx_idx = 0; return; }
         if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); rx_idx = 0; return; }
         if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); rx_idx = 0; return; }
         if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); rx_idx = 0; return; }
-
-        // Debug Color Test ('z' / 'Z')
-        if (c == 'z' || c == 'Z')
-        {
-            ColourData_t raw;
-            if (ColourSensor_ReadRaw(&raw) == HAL_OK)
-            {
-                float rR = (raw.c > 0) ? (float)raw.r / raw.c : 0;
-                float gR = (raw.c > 0) ? (float)raw.g / raw.c : 0;
-                float bR = (raw.c > 0) ? (float)raw.b / raw.c : 0;
-                char msg[80];
-                sprintf(msg, "[RATIOS] R:%.2f G:%.2f B:%.2f C:%u\r\n", rR, gR, bR, raw.c);
-                btPrint(msg);
-
-                DetectedColour_t det = ColourSensor_GetColour();
-                if (det == COLOUR_RED) btPrint("-> RED\r\n");
-                else if (det == COLOUR_GREEN) btPrint("-> GREEN\r\n");
-                else if (det == COLOUR_BLUE) btPrint("-> BLUE\r\n");
-                else btPrint("-> UNKNOWN\r\n");
-            }
-            rx_idx = 0;
-            return;
-        }
 
         // Movement (W/A/S/D) - executes immediately on keystroke
         if (c == 'W' || c == 'w') motion = "FORWARD";
