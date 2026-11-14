@@ -42,11 +42,11 @@
 #define IR_REPORT_MS       400U  /* send IR report at most 2.5 times/sec */
 #define LINE_LEVEL   GPIO_PIN_SET   /* level a sensor outputs when it sees the BLACK line.
                                        Flip to GPIO_PIN_RESET if it's the opposite */
-#define IR_DEBUG     0              /* 1 = send sensor states while line following (blocks the loop
+#define IR_DEBUG     1              /* 1 = send sensor states while line following (blocks the loop
                                        ~30-45 ms per print). The pattern logger (L key) is better. */
 #define TUNING_KEYS  1              /* 1 = live tuning enabled, 0 = disabled */
 
-#define OUTER_JUNCTION_ONLY 1       /* 1 = S0/S4 never steer, PD uses S1-S3
+#define OUTER_JUNCTION_ONLY 0      /* 1 = S0/S4 never steer, PD uses S1-S3
                                        0 = all five sensors steer (assumes equal sensor spacing) */
 //Rear IR sensor
 #define REAR_IR_PORT       GPIOB
@@ -54,19 +54,19 @@
 
 // PD controller settings (copy your tuned values here when done)
 #if OUTER_JUNCTION_ONLY
-#define KP_DEFAULT         350.0f   // PD over 3 sensors
+#define KP_DEFAULT         250.0f   // PD over 3 sensors
 #define HARD_ERROR         2.0f     // |error| at or beyond this: pivot in place (line only under S1 or S3)
 #else
-#define KP_DEFAULT         300.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
+#define KP_DEFAULT         200.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
 #define HARD_ERROR         3.0f
 #endif
-#define KD_DEFAULT         0.0f     //Damper
+#define KD_DEFAULT         0.35f     //Damper
 #define CONTROL_PERIOD_MS  10U
 #define PWM_MAX            999
 
 // Dashed line gap + 90 degree corner
-#define GAP_CROSS_MS       200U     // straight-ahead hold when the line was centred (dashed gap)
-#define CORNER_FWD_MS      550U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
+#define GAP_CROSS_MS       500U     // straight-ahead hold when the line was centred (dashed gap)
+#define CORNER_FWD_MS      100U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 300      // slowest pivot speed
 
@@ -78,7 +78,7 @@
 #define AMBIG_HOLD_MS      100U     // keep the last motor command this long before stopping
 
 // Side branch (T-junction) turn, used by mission.c
-#define BRANCH_FWD_MS      650U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
+#define BRANCH_FWD_MS      150U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
 
 // Pattern logger
 #define LOG_SIZE           300U     // entries kept (newest overwrite the oldest)
@@ -332,12 +332,12 @@ void lineFollow(int speed)
      *   left bar  = S0 S1 S2 on  (11100 / 11110)
      *   right bar = S4 S3 S2 on  (00111 / 01111)
      * 10000 or 11000 (no centre sensor) is the line drifting out, not a bar. */
-    const uint8_t leftBar  = (s[0] && s[1] && s[2]) ? 1U : 0U;
-    const uint8_t rightBar = (s[4] && s[3] && s[2]) ? 1U : 0U;
+    const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
+    const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
 #else
-    /* all sensors steer, so a bar is a far sensor AND the centre sensor on together */
-    const uint8_t leftBar  = (s[0] && s[2]) ? 1U : 0U;
-    const uint8_t rightBar = (s[4] && s[2]) ? 1U : 0U;
+    /* all sensors steer, so a bar is a far sensor AND an inner/centre sensor on together */
+    const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
+    const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
 #endif
     int8_t barNow = 0;                       /* -1 left bar, +1 right bar, 2 both (wide), 0 none */
     if (leftBar && rightBar) barNow = 2;
@@ -377,7 +377,7 @@ void lineFollow(int speed)
         else              { s[3] = 0; }
 #else
         if (barLatch < 0) { s[0] = 0; s[1] = 0; }
-        else              { s[3] = 0; s[4] = 0; }
+        else 			  { s[3] = 0; s[4] = 0; }
 #endif
     }
 
@@ -386,7 +386,8 @@ void lineFollow(int speed)
         count += s[i];
 
     /* Bar is behind us and a sensor sees the line again: forget the bar side */
-    if (barLatch != 0 && !maskActive && count > 0)
+    /* Bar is behind us and a sensor sees the line again: forget the bar side (unless mid-pivot) */
+    if (barLatch != 0 && !maskActive && !cornerPivoting && count > 0)
         barLatch = 0;
 
     /* While a bar is latched, steering memory points at the bar side (used by the corner pivot) */
@@ -405,12 +406,18 @@ void lineFollow(int speed)
     // Any sensor sees the line again: leave recovery / corner
     if (count > 0)
     {
-        if (cornerPivoting)
-        {
-            cornerCount++;
-            cornerPivoting = 0;
-        }
-        recovering = 0;
+    	// Only finish the corner pivot once the center sensor (s[2]) is back on the line
+    	if (cornerPivoting && s[2])
+    	{
+    	    cornerCount++;
+    	    cornerPivoting = 0;
+    	    barLatch = 0;
+    	    recovering = 0;
+    	}
+    	else if (!cornerPivoting && count > 0)
+    	{
+    	    recovering = 0;
+    	}
     }
 
     // Wide bar = both outer sensors on (crossing or end bar)
@@ -423,63 +430,77 @@ void lineFollow(int speed)
         action = "CROSSING";
     }
 
-    // All white: dashed gap, 90 degree corner, or lost line
-    else if (count == 0)
-    {
-        previousValid = 0;
-
-        if (!recovering)
+    // All white (00000): either right after a corner bar, or a dotted-line gap / brief dropout
+        else if (count == 0)
         {
-            lostStart = now;
-            recovering = 1;
-        }
+            previousValid = 0;
 
-        /* How long to keep going straight before pivoting:
-         *   line was centred             -> short hold (dashed gap)
-         *   a side bar was just crossed  -> corner distance, then pivot toward the bar side
-         *   line was lost sideways       -> no hold, pivot right away */
-        uint32_t holdMs = 0;
-        if (holdOk)
-            holdMs = (lastDir == 0) ? GAP_CROSS_MS : cornerFwdMs;
-
-        uint32_t lostMs = now - lostStart;
-
-        if (lostMs < holdMs)
-        {
-            forward(speed);
-            action = (lastDir == 0) ? "GAP - HOLD" : "CORNER - FORWARD";
-        }
-        else if (lastDir == 0)
-        {
-            stopMotors();
-            action = "NO LAST DIRECTION";
-        }
-        else if ((lostMs - holdMs) >= PIVOT_TIMEOUT_MS)
-        {
-            stopMotors();
-            action = "PIVOT FAILED";
-        }
-        else
-        {
-            int pivotSpeed = speed / 2;
-            if (pivotSpeed < RECOVERY_MIN_SPEED)
-                pivotSpeed = RECOVERY_MIN_SPEED;
-
-            if (holdOk)                 // only a real corner pivot counts, not a sideways recovery
-                cornerPivoting = 1;
-
-            if (lastDir == -1)
+            if (!recovering)
             {
-                turnLeft(pivotSpeed);
-                action = "CORNER - PIVOT LEFT";
+                lostStart = now;
+                recovering = 1;
+            }
+
+            const uint8_t afterBar = (barLatch != 0) ? 1U : 0U;
+            const uint32_t lostMs = now - lostStart;
+
+            if (afterBar || cornersSeen > 0)
+            {
+                // Real corner bar was detected before going all-white:
+                // 1. Drive straight for cornerFwdMs so wheel axle reaches the corner
+                // 2. Pivot toward the bar side until a sensor sees the line
+                if (!cornerPivoting && lostMs < cornerFwdMs)
+                {
+                    forward(speed);
+                    action = "CORNER - FORWARD";
+                }
+                else if ((lostMs - cornerFwdMs) >= PIVOT_TIMEOUT_MS)
+                {
+                    stopMotors();
+                    barLatch = 0;
+                    cornerPivoting = 0;
+                    action = "CORNER - TIMEOUT";
+                }
+                else
+                {
+                    int pivotSpeed = speed * 0.7;
+                    if (pivotSpeed < RECOVERY_MIN_SPEED)
+                        pivotSpeed = RECOVERY_MIN_SPEED;
+
+                    cornerPivoting = 1;
+
+                    if (lastDir == -1)
+                    {
+                        turnLeft(pivotSpeed);
+                        action = "CORNER - PIVOT LEFT";
+                    }
+                    else
+                    {
+                        turnRight(pivotSpeed);
+                        action = "CORNER - PIVOT RIGHT";
+                    }
+                }
             }
             else
             {
-                turnRight(pivotSpeed);
-                action = "CORNER - PIVOT RIGHT";
+                // No corner bar seen (dotted-line gap or momentary 00000):
+                // Never pivot; creep forward slowly until PD catches the line again
+                if (lostMs >= PIVOT_TIMEOUT_MS)
+                {
+                    stopMotors();
+                    action = "LOST - TIMEOUT";
+                }
+                else
+                {
+                    int slowSpeed = speed / 2;
+                    if (slowSpeed < RECOVERY_MIN_SPEED)
+                        slowSpeed = RECOVERY_MIN_SPEED;
+
+                    forward(slowSpeed);
+                    action = "GAP / CREEP FORWARD";
+                }
             }
         }
-    }
 
     // Ambiguous pattern: keep the last motor command briefly (sharp turns sweep across lines), then stop
     else if (amb)

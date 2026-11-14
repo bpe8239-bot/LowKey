@@ -18,4 +18,6 @@ uint8_t  missionTick(int speed);          /* call every loop in auto mode: 1 = r
 void     missionSetParam(char id, uint32_t value);
 uint32_t missionGetParam(char id);
 
+extern uint8_t cornersSeen;
+
 #endif /* INC_MISSION_H_ */

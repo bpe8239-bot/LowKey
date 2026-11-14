@@ -88,6 +88,7 @@ static uint8_t       target = 0;         /* ball number 1..3, 0 = colour not rea
 
 /* per-step working variables */
 static uint8_t       cornerBase = 0;
+uint8_t		 cornersSeen = 0;
 static BranchState_t brState = BR_COUNT;
 static uint8_t       branchCount = 0;
 static uint8_t       sawWhite = 0;
@@ -154,6 +155,7 @@ static void startStep(void)
     {
         case ST_FOLLOW_CORNERS:
             cornerBase = lineFollowCorners();
+            cornersSeen = 0;
             break;
 
         case ST_BRANCH:
@@ -230,20 +232,27 @@ uint8_t missionTick(int speed)
     switch (s->type)
     {
         /* ------------------------------------------------------------------ */
-        case ST_FOLLOW_CORNERS:
-        {
-            (void)lineBarEvent();                       /* bar events don't matter here */
-            lineFollow(speed);
+    case ST_FOLLOW_CORNERS:
+            {
+                (void)lineBarEvent();
+                lineFollow(speed);
+                const uint8_t turned = lineFollowCorners() - cornerBase;
 
-            const uint8_t turned = (uint8_t)(lineFollowCorners() - cornerBase);
+                if (turned > cornersSeen)
+                {
+                    cornersSeen = turned;
+                    char msg[60];
+                    snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
+                    btPrint(msg);
+                }
 
-            if (target == 0 && turned >= 1)
-                return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
+                if (target == 0 && turned >= 1)
+                    return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
 
-            if (turned >= s->n)
-                nextStep();
-            return 1;
-        }
+                if (turned >= s->n)
+                    nextStep();
+                return 1;
+            }
 
         /* ------------------------------------------------------------------ */
         case ST_BRANCH:
@@ -276,6 +285,9 @@ uint8_t missionTick(int speed)
                                 tsEst = measured;
                             }
                             branchCount++;
+                            char msg[60];
+                                        sprintf(msg, "Branch Count: %i\r\n", branchCount);
+                                        btPrint(msg);
                             lastEventTick = now;
                             lastWasReal = 1;
                             nextExpected = now + tsEst;
@@ -329,7 +341,7 @@ uint8_t missionTick(int speed)
                 case BR_PIVOT:
                 default:
                 {
-                    int pivotSpeed = speed / 2;
+                    int pivotSpeed = speed * 0.7;
                     if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
 
                     if (s->side < 0) turnLeft(pivotSpeed);

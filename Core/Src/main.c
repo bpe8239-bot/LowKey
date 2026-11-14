@@ -115,7 +115,7 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 static char cmd = 'X';
-static int speed = 750;                 /* 0-999 */
+static int speed = 200;                 /* 0-999 */
 static uint32_t lastCmdTime = 0;
 static uint8_t autoMode = 0;           /* 1 = Basic Map Loop; 2 = Line Follow only */
 static uint8_t colourReady = 0;
@@ -186,7 +186,6 @@ static void colourDebugTick(void)
 #endif
 }
 
-/*Bluetooth Keybind command*/
 static void handleBtCommand(char c)
 {
     static char rx_buf[32];
@@ -202,7 +201,6 @@ static void handleBtCommand(char c)
         rx_buf[rx_idx] = '\0';   // Null-terminate string
         rx_idx = 0;              // Reset buffer index for next command
 
-        // Block multi-character tuning/status commands if Debug Mode is OFF
         if (!debugMode)
         {
             btPrint("[LOCKED] Send 'T' to enable Debug Mode first\r\n");
@@ -265,115 +263,127 @@ static void handleBtCommand(char c)
         return;
     }
 
-    // 2. Accumulate normal characters into buffer until newline arrives
-    if (rx_idx < sizeof(rx_buf) - 1)
+    // 2. Multi-character PID tuning state machine (KP...; / KD...; / K;)
+    if (debugMode && pidTuneKey(c))
     {
-        rx_buf[rx_idx++] = c;
-    }
-    else
-    {
-        rx_idx = 0; // Overflow safety reset
-        btPrint("[ERR] Command string too long\r\n");
+        rx_idx = 0;
         return;
     }
 
-    // 3. Instant Single-Character Commands
-    if (rx_idx == 1)
+    // 3. If already mid-buffer (rx_idx > 0), keep collecting digits/decimal until '\n'
+    if (rx_idx > 0)
     {
-        // --- Explicit Debug Mode Control ('T' = ON, 't' = OFF) ---
-        if (c == 'T')
+        // Allow immediate STOP ('X'/'x'/' ') to break out of a half-typed line
+        if (c == 'X' || c == 'x' || c == ' ')
         {
-            debugMode = 1;
-            btPrint("[DEBUG] ON - PID & Colour tuning unlocked\r\n");
             rx_idx = 0;
-            return;
-        }
-        if (c == 't')
-        {
-            debugMode = 0;
-            btPrint("[DEBUG] OFF - Tuning locked\r\n");
-            rx_idx = 0;
+            autoMode = 0;
+            cmd = 'X';
+            stopMotors();
+            btPrint("[MOTOR] STOP\r\n");
             return;
         }
 
-        // --- Debug-Only Single-Char Commands (PID Tuning, Color Cal, Color Test) ---
-        if (debugMode)
+        if (rx_idx < sizeof(rx_buf) - 1)
         {
-            if (pidTuneKey(c)) { rx_idx = 0; return; }
-
-            if (c == 'c' || c == 'C')
-            {
-                ColourSensor_CalibrateWhite();
-                btPrint("[CAL] White Calibrated\r\n");
-                rx_idx = 0;
-                return;
-            }
-
-            if (c == 'z' || c == 'Z')
-            {
-                ColourData_t raw;
-                if (ColourSensor_ReadRaw(&raw) == HAL_OK)
-                {
-                    float rR = (raw.c > 0) ? (float)raw.r / raw.c : 0;
-                    float gR = (raw.c > 0) ? (float)raw.g / raw.c : 0;
-                    float bR = (raw.c > 0) ? (float)raw.b / raw.c : 0;
-                    char msg[80];
-                    sprintf(msg, "[RATIOS] R:%.2f G:%.2f B:%.2f C:%u\r\n", rR, gR, bR, raw.c);
-                    btPrint(msg);
-
-                    DetectedColour_t det = ColourSensor_GetColour();
-                    if (det == COLOUR_RED) btPrint("-> RED\r\n");
-                    else if (det == COLOUR_GREEN) btPrint("-> GREEN\r\n");
-                    else if (det == COLOUR_BLUE) btPrint("-> BLUE\r\n");
-                    else btPrint("-> UNKNOWN\r\n");
-                }
-                rx_idx = 0;
-                return;
-            }
+            rx_buf[rx_idx++] = c;
         }
         else
         {
-            if (c == 'c' || c == 'C' || c == 'z' || c == 'Z')
-            {
-                btPrint("[LOCKED] Send 'T' to enable Debug Mode\r\n");
-                rx_idx = 0;
-                return;
-            }
-        }
-
-        // --- Standard Driving & Mission Commands (Always Available) ---
-        if (c >= '1' && c <= '9')
-        {
-            speed = 300 + (c - '1') * 87;  /* 1..9 -> 300..996 */
-            lastCmdTime = HAL_GetTick();
-            snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
-            btPrint(line);
             rx_idx = 0;
+            btPrint("[ERR] Command string too long\r\n");
+        }
+        return;
+    }
+
+    // 4. Fresh single-character commands (rx_idx is guaranteed to be 0 here)
+
+    // --- Explicit Debug Mode Control ('T' = ON, 't' = OFF) ---
+    if (c == 'T')
+    {
+        debugMode = 1;
+        btPrint("[DEBUG] ON - PID & Colour tuning unlocked\r\n");
+        return;
+    }
+    if (c == 't')
+    {
+        debugMode = 0;
+        btPrint("[DEBUG] OFF - Tuning locked\r\n");
+        return;
+    }
+
+    // --- Multi-Character Line Prefixes (Start buffering ONLY for these letters) ---
+    if (c == 'm' || c == 'r' || c == 'g' || c == 'b' || c == 'o' || c == 'p' || c == 'v' || c == 'V')
+    {
+        if (!debugMode)
+        {
+            btPrint("[LOCKED] Send 'T' to enable Debug Mode first\r\n");
             return;
         }
-        if (c == 'M') { autoMode = 1; missionStart(); btPrint("[MODE] MISSION STARTS\r\n"); rx_idx = 0; return; }
-        if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); rx_idx = 0; return; }
-        if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); rx_idx = 0; return; }
-        if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; T/t debug on/off; (Debug: m/r/g/b/o/p+val, v, c, z)\r\n"); rx_idx = 0; return; }
-        if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); rx_idx = 0; return; }
-        if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); rx_idx = 0; return; }
-        if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); rx_idx = 0; return; }
+        rx_buf[rx_idx++] = c; // Start line buffer (rx_idx becomes 1)
+        return;
+    }
 
-        // Movement (W/A/S/D) - executes immediately on keystroke
-        if (c == 'W' || c == 'w') motion = "FORWARD";
-        else if (c == 'S' || c == 's') motion = "BACKWARD";
-        else if (c == 'A' || c == 'a') motion = "LEFT";
-        else if (c == 'D' || c == 'd') motion = "RIGHT";
-
-        if (motion != NULL)
+    // --- Debug-Only Single-Char Commands ---
+    if (c == 'c' || c == 'C')
+    {
+        if (!debugMode) { btPrint("[LOCKED] Send 'T' to enable Debug Mode\r\n"); return; }
+        ColourSensor_CalibrateWhite();
+        btPrint("[CAL] White Calibrated\r\n");
+        return;
+    }
+    if (c == 'z' || c == 'Z')
+    {
+        if (!debugMode) { btPrint("[LOCKED] Send 'T' to enable Debug Mode\r\n"); return; }
+        ColourData_t raw;
+        if (ColourSensor_ReadRaw(&raw) == HAL_OK)
         {
-            autoMode = 0;
-            cmd = c;
-            lastCmdTime = HAL_GetTick();
-            snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
-            btPrint(line);
-            rx_idx = 0;
+            float rR = (raw.c > 0) ? (float)raw.r / raw.c : 0;
+            float gR = (raw.c > 0) ? (float)raw.g / raw.c : 0;
+            float bR = (raw.c > 0) ? (float)raw.b / raw.c : 0;
+            char msg[80];
+            sprintf(msg, "[RATIOS] R:%.2f G:%.2f B:%.2f C:%u\r\n", rR, gR, bR, raw.c);
+            btPrint(msg);
+
+            DetectedColour_t det = ColourSensor_GetColour();
+            if (det == COLOUR_RED) btPrint("-> RED\r\n");
+            else if (det == COLOUR_GREEN) btPrint("-> GREEN\r\n");
+            else if (det == COLOUR_BLUE) btPrint("-> BLUE\r\n");
+            else btPrint("-> UNKNOWN\r\n");
         }
+        return;
+    }
+
+    // --- Standard Driving & Mission Commands (Always Available) ---
+    if (c >= '1' && c <= '9')
+    {
+        speed = 100 + (c - '1') * 87;  /* 1..9 -> 300..996 */
+        lastCmdTime = HAL_GetTick();
+        snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
+        btPrint(line);
+        return;
+    }
+    if (c == 'M') { autoMode = 1; missionStart(); btPrint("[MODE] MISSION STARTS\r\n"); return; }
+    if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); return; }
+    if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); return; }
+    if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; T/t debug on/off; (Debug: m/r/g/b/o/p+val, v, c, z)\r\n"); return; }
+    if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); return; }
+    if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); return; }
+    if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); return; }
+
+    // Movement (W/A/S/D)
+    if (c == 'W' || c == 'w') motion = "FORWARD";
+    else if (c == 'S' || c == 's') motion = "BACKWARD";
+    else if (c == 'A' || c == 'a') motion = "LEFT";
+    else if (c == 'D' || c == 'd') motion = "RIGHT";
+
+    if (motion != NULL)
+    {
+        autoMode = 0;
+        cmd = c;
+        lastCmdTime = HAL_GetTick();
+        snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
+        btPrint(line);
     }
 }
 /* USER CODE END 0 */
