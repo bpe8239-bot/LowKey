@@ -38,7 +38,23 @@
  *   N = Line Following ONLY
  *   L = Line Logging
  *   M = Basic Map Loop
- *   T = Show KP KD value
+ *   T/K = Show KP KD value
+ *
+ *   --------------------------Tuning Keys-------------------------------------------
+ *  	Junction counting (primary method)
+ *  KC	=  Straight-ahead time at a corner before pivoting
+ *  KJ	=  Straight-ahead time after counting the target branch,
+ *  	   before pivoting into it
+ *  KC and KJ are timed straight-ahead drives, so they’re technically time-based.
+ *  They sit in this group because the junction-counting method needs them,
+ *  whether or not the backup is enabled.
+ *
+ *  	Time-based (backup for the counting)
+ *  KA	=  Expected time from the end of the 2nd corner to the first branch bar
+ *  KB	=  Expected time between branch bars
+ *  KW	=  ± window around each expected time
+ *
+ *
  */
 /**
   ******************************************************************************
