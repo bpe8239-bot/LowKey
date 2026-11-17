@@ -69,6 +69,7 @@
 #define CORNER_FWD_MS      100U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 260      // slowest pivot speed
+#define CORNER_PIVOT_SPEED 300
 
 // Side bars (branches / corners)
 #define BAR_LOCKOUT_MS     250U     // ignore a new bar event this soon after the last one
@@ -444,8 +445,9 @@ void lineFollow(int speed)
             const uint8_t afterBar = (barLatch != 0) ? 1U : 0U;
             const uint32_t lostMs = now - lostStart;
 
-            if (afterBar || cornersSeen > 0)
+            if (afterBar || cornerCount > 0)
             {
+            	action = "CORNER - SEEN";
                 // Real corner bar was detected before going all-white:
                 // 1. Drive straight for cornerFwdMs so wheel axle reaches the corner
                 // 2. Pivot toward the bar side until a sensor sees the line
@@ -463,20 +465,16 @@ void lineFollow(int speed)
                 }
                 else
                 {
-                    int pivotSpeed = speed / 2;
-                    if (pivotSpeed < RECOVERY_MIN_SPEED)
-                        pivotSpeed = RECOVERY_MIN_SPEED;
-
                     cornerPivoting = 1;
 
                     if (lastDir == -1)
                     {
-                        turnLeft(pivotSpeed);
+                        turnLeft(CORNER_PIVOT_SPEED);
                         action = "CORNER - PIVOT LEFT";
                     }
                     else
                     {
-                        turnRight(pivotSpeed);
+                        turnRight(CORNER_PIVOT_SPEED);
                         action = "CORNER - PIVOT RIGHT";
                     }
                 }
@@ -502,6 +500,23 @@ void lineFollow(int speed)
             }
         }
 
+    // in lineFollow(), put this BEFORE "else if (amb)":
+        else if (cornerPivoting)
+        {
+            if ((now - lostStart) >= (cornerFwdMs + PIVOT_TIMEOUT_MS))
+            {
+                stopMotors();
+                barLatch = 0;
+                cornerPivoting = 0;
+                action = "CORNER - TIMEOUT";
+            }
+            else
+            {
+                if (lastDir == -1) turnLeft(CORNER_PIVOT_SPEED);
+                else               turnRight(CORNER_PIVOT_SPEED);
+                action = "CORNER - PIVOT (LINE SEEN)";
+            }
+        }
     // Ambiguous pattern: keep the last motor command briefly (sharp turns sweep across lines), then stop
     else if (amb)
     {

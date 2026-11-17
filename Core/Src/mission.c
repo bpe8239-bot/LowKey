@@ -38,13 +38,18 @@
 #include <stdio.h>
 
 #define BRANCH_COUNT_TIMEOUT_MS  20000U /* give up if the branch step takes this long */
-#define BRANCH_PIVOT_BLIND_MS    150U   /* during the branch pivot, ignore the centre sensor for this long */
+#define BRANCH_PIVOT_BLIND_MS    300U   /* during the branch pivot, ignore the centre sensor for this long */
 #define BRANCH_PIVOT_TIMEOUT_MS  2000U  /* give up if the pivot never finds the branch */
 #define END_BAR_TIMEOUT_MS       8000U  /* give up if the end bar is never found */
 #define END_BAR_CONFIRM_MS       30U    /* S0, S2 and S4 on for this long = end bar */
 #define PIVOT_MIN_SPEED          300
 #define CENTRE_BIT               0x04U  /* bit2 = centre sensor */
 #define END_BAR_BITS             0x15U  /* bit0 + bit2 + bit4 */
+#define BRANCH_SPEED      310    /* fixed slow speed for the branch counting phase */
+#define BRANCH_MIN_SPEED  280    /* don't go lower than this */
+#define BRANCH_END_TIMEOUT_MS  4000U   /* safety net while running down the branch */
+#define CORNER_SETTLE_MS  250U   /* let the pivot finish and PD re-centre before the next step */
+
 
 /* Time-based backup, defaults for about 20 cm/s. Measure with the L key and tune with KA / KB / KW. */
 #define T1_DEFAULT_MS            400U   /* end of 2nd corner -> first branch bar */
@@ -72,7 +77,7 @@ static const Step_t basicScript[] =
 {
     { ST_FOLLOW_CORNERS,  0, 2 },   /* top-right and bottom-right corners; colour read on the way */
     { ST_BRANCH,         -1, 0 },   /* branches on the left; count up to the ball number */
-    { ST_END_BAR,         0, 0 },   /* follow the branch to the end bar */
+	{ ST_STOP_CORNER,  	  0, 0 },
     { ST_FINISH,          0, 0 }
 };
 
@@ -223,6 +228,14 @@ void missionStart(void)
     btPrint("[MISSION] START - reading colour card\r\n");
 }
 
+static int branchSpeed(int speed)
+{
+    int s = speed / 2;                 // half the mission speed
+    if (s < BRANCH_MIN_SPEED) s = BRANCH_MIN_SPEED;
+    if (s > BRANCH_SPEED)     s = BRANCH_SPEED;
+    return s;
+}
+
 uint8_t missionTick(int speed)
 {
     if (!active) return 0;
@@ -246,6 +259,7 @@ uint8_t missionTick(int speed)
                 if (turned > cornersSeen)
                 {
                     cornersSeen = turned;
+                    btPrint("Corner Seen");
                     char msg[60];
                     snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
                     btPrint(msg);
@@ -255,7 +269,12 @@ uint8_t missionTick(int speed)
                     return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
 
                 if (turned >= s->n)
-                    nextStep();
+                    {
+                        /* All required corners counted — give the robot time to finish the
+                           pivot and re-centre on the line before handing over to ST_BRANCH. */
+                        if ((now - stateStart) >= CORNER_SETTLE_MS)
+                            nextStep();
+                    }
                 return 1;
             }
 
@@ -269,8 +288,8 @@ uint8_t missionTick(int speed)
             {
                 case BR_COUNT:
                 {
-                    const int8_t ev = lineBarEvent();
-                    lineFollow(speed);                  /* masks the bar side so we drive straight past it */
+                	const int8_t ev = lineBarEvent();
+                	lineFollow(branchSpeed(speed));                 /* masks the bar side so we drive straight past it */
 
                     if (ev == s->side)
                     {
@@ -308,23 +327,24 @@ uint8_t missionTick(int speed)
                             }
                         }
                     }
-                    else if (now > (nextExpected + winMs))
-                    {
-                        /* the expected branch never showed up: count it as missed */
-                        branchCount++;
-                        lastWasReal = 0;
 
-                        snprintf(line, sizeof(line), "[MISSION] Branch %u assumed (missed)\r\n",
-                                 (unsigned)branchCount);
-                        btPrint(line);
-
-                        if (branchCount == target)
-                        {
-                            brState = BR_FWD;
-                            stateStart = nextExpected;  /* as if it had been seen at the expected time */
-                        }
-                        nextExpected += tsEst;
-                    }
+//                    else if (now > (nextExpected + winMs))
+//                    {
+//                        /* the expected branch never showed up: count it as missed */
+//                        branchCount++;
+//                        lastWasReal = 0;
+//
+//                        snprintf(line, sizeof(line), "[MISSION] Branch %u assumed (missed)\r\n",
+//                                 (unsigned)branchCount);
+//                        btPrint(line);
+//
+//                        if (branchCount == target)
+//                        {
+//                            brState = BR_FWD;
+//                            stateStart = nextExpected;  /* as if it had been seen at the expected time */
+//                        }
+//                        nextExpected += tsEst;
+//                    }
 
                     if ((now - stateStart) >= BRANCH_COUNT_TIMEOUT_MS && brState == BR_COUNT)
                         return fail("[MISSION] FAILED - target branch not found\r\n");
@@ -333,7 +353,7 @@ uint8_t missionTick(int speed)
 
                 case BR_FWD:
                     (void)lineBarEvent();
-                    lineFollow(speed);                  /* keep going straight so the wheels reach the branch */
+                    lineFollow(branchSpeed(speed));                    /* keep going straight so the wheels reach the branch */
                     if ((now - stateStart) >= lineFollowBranchFwdMs())
                     {
                         brState = BR_PIVOT;
@@ -346,7 +366,7 @@ uint8_t missionTick(int speed)
                 case BR_PIVOT:
                 default:
                 {
-                    int pivotSpeed = speed / 2;
+                    int pivotSpeed = speed;
                     if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
 
                     if (s->side < 0) turnLeft(pivotSpeed);
@@ -354,31 +374,40 @@ uint8_t missionTick(int speed)
 
                     if (bits == 0) sawWhite = 1;
 
-                    /* done when the centre sensor finds the branch line, after leaving the main line */
                     if (sawWhite && (bits & CENTRE_BIT) && (now - stateStart) >= BRANCH_PIVOT_BLIND_MS)
                     {
                         lineFollowReset();
-                        nextStep();
+                        nextStep();              /* -> ST_STOP_CORNER, which owns the T stop */
                         return 1;
                     }
                     if ((now - stateStart) >= BRANCH_PIVOT_TIMEOUT_MS)
                         return fail("[MISSION] FAILED - branch line not found after turning\r\n");
                     return 1;
+
                 }
             }
         }
         case ST_STOP_CORNER:
                 {
                     const int8_t ev = lineBarEvent();
+                    const uint32_t cornerElapsed = now - stateStart;
 
                     /* Stop if a left/right corner bar (-1 or +1) OR a wide bar (S0+S2+S4) is seen */
-                    if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS)
+                    if (cornerElapsed > 250U)
                     {
-                        arrivedAligned = lineAligned();
-                        stopMotors();
-                        nextStep();
-                        return 1;
+                    	if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS)
+                    	                    {
+                    	                        arrivedAligned = lineAligned();
+                    	                        stopMotors();
+                    	                        nextStep();
+                    	                        return 1;
+                    	                    }
                     }
+                    else
+                                {
+                                    (void)lineBarEvent(); // Keep clearing events during the blind window
+                                }
+
 
                     if ((now - stateStart) >= END_BAR_TIMEOUT_MS)
                         return fail("[MISSION] FAILED - corner after branch not found\r\n");
