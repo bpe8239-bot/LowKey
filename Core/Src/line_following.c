@@ -6,7 +6,7 @@
  *
  * 5-sensor line following with PATTERN-based junction recognition.
  *
- * Sensors, left to right:  S0 PB11   S1 PB12   S2 PB13   S3 PB14   S4 PB15
+ * Sensors, left to right:  S0 PB1  S1 PB3   S2 PB13   S3 PB14   S4 PB15
  * (S0/S4 are 4.5 cm from the centre, S1/S3 are 1.9 cm from the centre, line is 1.9 cm wide)
  *
  * Steering (OUTER_JUNCTION_ONLY = 1, default): PD uses S1, S2, S3 only (weights -2, 0, +2).
@@ -50,23 +50,23 @@
                                        0 = all five sensors steer (assumes equal sensor spacing) */
 //Rear IR sensor
 #define REAR_IR_PORT       GPIOB
-#define REAR_IR_PIN        GPIO_PIN_10
+#define REAR_IR_PIN        GPIO_PIN_0
 
 // PD controller settings (copy your tuned values here when done)
 #if OUTER_JUNCTION_ONLY
-#define KP_DEFAULT         250.0f   // PD over 3 sensors
+#define KP_DEFAULT         105.0f   // PD over 3 sensors
 #define HARD_ERROR         2.0f     // |error| at or beyond this: pivot in place (line only under S1 or S3)
 #else
-#define KP_DEFAULT         200.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
+#define KP_DEFAULT         75.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
 #define HARD_ERROR         3.0f
 #endif
-#define KD_DEFAULT         0.35f     //Damper
+#define KD_DEFAULT         0.80f     //Damper
 #define CONTROL_PERIOD_MS  10U
-#define PWM_MAX            999
+#define PWM_MAX            700
 
 // Dashed line gap + 90 degree corner
 #define GAP_CROSS_MS       500U     // straight-ahead hold when the line was centred (dashed gap)
-#define CORNER_FWD_MS      100U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
+#define CORNER_FWD_MS      50U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 260      // slowest pivot speed
 #define CORNER_PIVOT_SPEED 300
@@ -79,7 +79,7 @@
 #define AMBIG_HOLD_MS      100U     // keep the last motor command this long before stopping
 
 // Side branch (T-junction) turn, used by mission.c
-#define BRANCH_FWD_MS      150U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
+#define BRANCH_FWD_MS      2000U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
 
 // Pattern logger
 #define LOG_SIZE           300U     // entries kept (newest overwrite the oldest)
@@ -91,7 +91,7 @@ typedef struct
     uint16_t      pin;
 } IrPin_t;
 
-static const IrPin_t  irPin[IR_COUNT]    = { {GPIOB, GPIO_PIN_11}, {GPIOB, GPIO_PIN_12}, {GPIOB, GPIO_PIN_13},
+static const IrPin_t  irPin[IR_COUNT]    = { {GPIOB, GPIO_PIN_1}, {GPIOB, GPIO_PIN_3}, {GPIOB, GPIO_PIN_13},
                                              {GPIOB, GPIO_PIN_14}, {GPIOB, GPIO_PIN_15} };
 static const int8_t   irWeight[IR_COUNT] = { -4, -2, 0, 2, 4 };
 
