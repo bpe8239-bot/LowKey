@@ -368,7 +368,7 @@ static void handleBtCommand(char c)
     }
     if (c == 'M') { autoMode = 1; missionStart(); OLED_UI_SetMode("MISSION"); btPrint("[MODE] MISSION STARTS\r\n"); return; }
     if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); OLED_UI_SetMode("LINE FOLLOWING"); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); return; }
-    if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); OLED_UI_SetMode("MANUAL"); btPrint("[MOTOR] STOP\r\n"); return; }
+    if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); OLED_UI_SetMode("MANUAL"); OLED_UI_SetStatus("READY"); btPrint("[MOTOR] STOP\r\n"); return; }
     if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; T/t debug on/off; (Debug: m/r/g/b/o/p+val, v, c, z)\r\n"); return; }
     if (c == 'F' || c == 'f') { Claw_Open(); OLED_UI_Claw("OPEN"); btPrint("[CLAW] OPEN\r\n"); return; }
     if (c == 'G') { Claw_Close(); OLED_UI_Claw("CLOSE"); btPrint("[CLAW] CLOSE\r\n"); return; }
@@ -385,6 +385,7 @@ static void handleBtCommand(char c)
         autoMode = 0;
         cmd = c;
         lastCmdTime = HAL_GetTick();
+        OLED_UI_SetStatus(motion);
         snprintf(line, sizeof(line), "[MOTOR] %s | Speed: %d\r\n", motion, speed);
         btPrint(line);
     }
