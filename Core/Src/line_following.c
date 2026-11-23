@@ -6,7 +6,7 @@
  *
  * 5-sensor line following with PATTERN-based junction recognition.
  *
- * Sensors, left to right:  S0 PB1  S1 PB3   S2 PB13   S3 PB14   S4 PB15
+ * Sensors, left to right:  S0 PB1  S1 PB0   S2 PB13   S3 PB14   S4 PB15
  * (S0/S4 are 4.5 cm from the centre, S1/S3 are 1.9 cm from the centre, line is 1.9 cm wide)
  *
  * Steering (OUTER_JUNCTION_ONLY = 1, default): PD uses S1, S2, S3 only (weights -2, 0, +2).
@@ -37,6 +37,7 @@
 #include "motor.h"
 #include "bluetooth.h"
 #include <stdio.h>
+#include "oled.h"
 
 #define IR_COUNT           5
 #define IR_REPORT_MS       400U  /* send IR report at most 2.5 times/sec */
@@ -50,7 +51,7 @@
                                        0 = all five sensors steer (assumes equal sensor spacing) */
 //Rear IR sensor
 #define REAR_IR_PORT       GPIOB
-#define REAR_IR_PIN        GPIO_PIN_0
+#define REAR_IR_PIN        GPIO_PIN_3
 
 // PD controller settings (copy your tuned values here when done)
 #if OUTER_JUNCTION_ONLY
@@ -91,7 +92,7 @@ typedef struct
     uint16_t      pin;
 } IrPin_t;
 
-static const IrPin_t  irPin[IR_COUNT]    = { {GPIOB, GPIO_PIN_1}, {GPIOB, GPIO_PIN_3}, {GPIOB, GPIO_PIN_13},
+static const IrPin_t  irPin[IR_COUNT]    = { {GPIOB, GPIO_PIN_1}, {GPIOB, GPIO_PIN_0}, {GPIOB, GPIO_PIN_13},
                                              {GPIOB, GPIO_PIN_14}, {GPIOB, GPIO_PIN_15} };
 static const int8_t   irWeight[IR_COUNT] = { -4, -2, 0, 2, 4 };
 
@@ -610,6 +611,7 @@ void lineFollowReset(void)
 
 	    // Pass the speeds to the debug function
 	    btReportIR(raw, action, actLeft, actRight);
+	    OLED_UI_SetStatus("LINE FOLLOWING");
 	}
 
 /* ---------------------------------------------------------------------------

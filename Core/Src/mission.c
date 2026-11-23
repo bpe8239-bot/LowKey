@@ -10,6 +10,7 @@
 #include "motor.h"
 #include "bluetooth.h"
 #include <stdio.h>
+#include "oled.h"
 
 #define BRANCH_COUNT_TIMEOUT_MS  20000U
 #define BRANCH_PIVOT_BLIND_MS    300U
@@ -184,6 +185,7 @@ static void readColour(void)
              "[MISSION] Colour %s -> ball %u\r\n",
              name, (unsigned)target);
     btPrint(line);
+    OLED_UI_ColourDetected(name);
 }
 
 void missionStart(void)
@@ -231,6 +233,7 @@ uint8_t missionTick(int speed)
             char msg[60];
             snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
             btPrint(msg);
+            OLED_UI_EventStatus("CORNER SEEN");
         }
 
         if (target == 0 && turned >= 1)
@@ -275,6 +278,7 @@ uint8_t missionTick(int speed)
                         snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
                                  (unsigned)branchCount, (unsigned)target);
                         btPrint(line);
+                        OLED_UI_EventStatus("BRANCH DETECTED");
 
                         lastEventTick = now;
                         lastWasReal = 1;

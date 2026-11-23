@@ -87,6 +87,7 @@
 #include "mission.h"
 #include "motor.h"
 #include "servo_claw.h"
+#include "oled.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -365,12 +366,12 @@ static void handleBtCommand(char c)
         btPrint(line);
         return;
     }
-    if (c == 'M') { autoMode = 1; missionStart(); btPrint("[MODE] MISSION STARTS\r\n"); return; }
-    if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); return; }
-    if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); btPrint("[MOTOR] STOP\r\n"); return; }
+    if (c == 'M') { autoMode = 1; missionStart(); OLED_UI_SetMode("MISSION"); btPrint("[MODE] MISSION STARTS\r\n"); return; }
+    if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); OLED_UI_SetMode("LINE FOLLOWING"); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); return; }
+    if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); OLED_UI_SetMode("MANUAL"); btPrint("[MOTOR] STOP\r\n"); return; }
     if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; T/t debug on/off; (Debug: m/r/g/b/o/p+val, v, c, z)\r\n"); return; }
-    if (c == 'F' || c == 'f') { Claw_Open(); btPrint("[CLAW] OPEN\r\n"); return; }
-    if (c == 'G') { Claw_Close(); btPrint("[CLAW] CLOSE\r\n"); return; }
+    if (c == 'F' || c == 'f') { Claw_Open(); OLED_UI_Claw("OPEN"); btPrint("[CLAW] OPEN\r\n"); return; }
+    if (c == 'G') { Claw_Close(); OLED_UI_Claw("CLOSE"); btPrint("[CLAW] CLOSE\r\n"); return; }
     if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); return; }
 
     // Movement (W/A/S/D)
@@ -456,6 +457,7 @@ int main(void)
     {
         btPrint("[COLOUR] INIT FAILED\r\n");
     }
+    OLED_UI_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -465,6 +467,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  OLED_UI_Tick(speed);
     uint8_t received;
     while (btPop(&received))
     {
@@ -506,6 +509,7 @@ int main(void)
     }
 
   }
+
   /* USER CODE END 3 */
 }
 
