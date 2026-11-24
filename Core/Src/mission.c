@@ -25,10 +25,6 @@
 #define BRANCH_END_TIMEOUT_MS    4000U
 #define CORNER_SETTLE_MS         250U
 
-#define T1_DEFAULT_MS            400U
-#define TS_DEFAULT_MS            1000U
-#define WIN_DEFAULT_MS           350U
-
 typedef enum
 {
     ST_FOLLOW_CORNERS = 0,
@@ -53,18 +49,18 @@ static const Step_t basicScript[] =
     { ST_FINISH,          0, 0 }
 };
 
-static const Step_t *script = basicScript;
-static uint8_t scriptLen = (uint8_t)(sizeof(basicScript) / sizeof(basicScript[0]));
+static const Step_t *script = basicScript; //Points to the sequence of navigation instructions.
+static uint8_t scriptLen = (uint8_t)(sizeof(basicScript) / sizeof(basicScript[0])); //Stores the total number of steps in the mission script.
 
 typedef enum { BR_COUNT = 0, BR_FWD, BR_PIVOT } BranchState_t;
 
-static uint8_t       active = 0;
-static uint8_t       stepIdx = 0;
-static uint32_t      stateStart = 0;
+static uint8_t       active = 0; //Determines whether the autonomous mission is running.
+static uint8_t       stepIdx = 0; //Tracks the current navigation step in the mission script.
+static uint32_t      stateStart = 0; //Records when the current navigation state began. Used for delays and timeouts.
 
-static uint8_t       target = 0;
+static uint8_t       target = 0; //Determines which branch the robot should enter based on the detected colour.
 
-static uint8_t       cornerBase = 0;
+static uint8_t       cornerBase = 0; //Stores the accumulated corner count at the beginning of a navigation step as a reference.
 uint8_t              cornersSeen = 0;
 static BranchState_t brState = BR_COUNT;
 static uint8_t       branchCount = 0;
@@ -73,36 +69,6 @@ static uint8_t       barSeen = 0;
 static uint32_t      barStart = 0;
 static uint8_t       arrivedAligned = 0;
 
-static uint32_t t1Ms = T1_DEFAULT_MS;
-static uint32_t tsMs = TS_DEFAULT_MS;
-static uint32_t winMs = WIN_DEFAULT_MS;
-static uint32_t nextExpected = 0;
-static uint32_t lastEventTick = 0;
-static uint8_t  lastWasReal = 0;
-static uint32_t tsEst = TS_DEFAULT_MS;
-
-void missionSetParam(char id, uint32_t value)
-{
-    switch (id)
-    {
-        case 'A': t1Ms = value;  break;
-        case 'B': tsMs = value;  break;
-        case 'W': winMs = value; break;
-        default: break;
-    }
-}
-
-uint32_t missionGetParam(char id)
-{
-    switch (id)
-    {
-        case 'A': return t1Ms;
-        case 'B': return tsMs;
-        case 'W': return winMs;
-        default:  return 0;
-    }
-}
-
 static uint8_t finish(void)
 {
      char line[96];
@@ -110,6 +76,7 @@ static uint8_t finish(void)
         snprintf(line, sizeof(line), "[MISSION] ARRIVED at ball %u (%s) - MANUAL MODE\r\n",
                  (unsigned)target, arrivedAligned ? "aligned" : "NOT aligned");
         btPrint(line);
+        OLED_UI_SetStatus("ARRIVED");
     active = 0;
     return 0;
 }
@@ -118,6 +85,7 @@ static uint8_t fail(const char *msg)
 {
     stopMotors();
     btPrint(msg);
+    OLED_UI_SetStatus("MISSION FAILED");
     active = 0;
     return 0;
 }
@@ -138,10 +106,6 @@ static void startStep(void)
             branchCount = 0;
             brState = BR_COUNT;
             (void)lineBarEvent();
-            nextExpected = now + t1Ms;
-            lastEventTick = 0;
-            lastWasReal = 0;
-            tsEst = tsMs;
             break;
 
         case ST_STOP_CORNER:
@@ -190,7 +154,6 @@ static void readColour(void)
 
 void missionStart(void)
 {
-    lineLogClear();
     lineFollowReset();
     active = 1;
     stepIdx = 0;
@@ -254,49 +217,30 @@ uint8_t missionTick(int speed)
 
         switch (brState)
         {
-            case BR_COUNT:
-            {
-                const int8_t ev = lineBarEvent();
-                lineFollow(branchSpeed(speed));
-
+        	case BR_COUNT:
+        	{
+        		const int8_t ev = lineBarEvent();
+        		lineFollow(branchSpeed(speed));
                 if (ev == s->side)
                 {
-                    if ((now + winMs) < nextExpected)
-                    {
-                        btPrint("[MISSION] Bar ignored (too early)\r\n");
-                    }
-                    else
-                    {
-                        if (lastWasReal && lastEventTick != 0U)
-                        {
-                            uint32_t measured = now - lastEventTick;
-                            if (measured < tsMs / 2U) measured = tsMs / 2U;
-                            if (measured > tsMs * 2U) measured = tsMs * 2U;
-                            tsEst = measured;
-                        }
-                        branchCount++;
-                        snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
-                                 (unsigned)branchCount, (unsigned)target);
-                        btPrint(line);
-                        OLED_UI_EventStatus("BRANCH DETECTED");
+                	branchCount++;
+                	snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
+                			(unsigned)branchCount, (unsigned)target);
+                	btPrint(line);
+                	OLED_UI_EventStatus("BRANCH DETECTED");
+                	if (branchCount == target)
+                	{
+                		brState = BR_FWD;
+                		stateStart = now;
+                		btPrint("[MISSION] Target found! Entering BR_FWD.\r\n");
+                	}
 
-                        lastEventTick = now;
-                        lastWasReal = 1;
-                        nextExpected = now + tsEst;
-
-                        if (branchCount == target)
-                        {
-                            brState = BR_FWD;
-                            stateStart = now;
-                            btPrint("[MISSION] Target found! Entering BR_FWD.\r\n");
-                        }
-                    }
                 }
 
                 if ((now - stateStart) >= BRANCH_COUNT_TIMEOUT_MS && brState == BR_COUNT)
-                    return fail("[MISSION] FAILED - target branch not found\r\n");
+            	return fail("[MISSION] FAILED - target branch not found\r\n");
                 return 1;
-            }
+        	}
 
             case BR_FWD:
             {
@@ -304,13 +248,11 @@ uint8_t missionTick(int speed)
                 lineFollow(branchSpeed(speed));
                 uint32_t fwdElapsed = now - stateStart;
                 uint32_t fwdTarget = lineFollowBranchFwdMs();
-
                 if (fwdElapsed >= fwdTarget)
                 {
                     brState = BR_PIVOT;
                     stateStart = now;
                     sawWhite = 0;
-
                     btPrint("[MISSION] FWD complete. Turning into branch...\r\n");
                     if (s->side < 0) btPrint("[MISSION] Action: turnLeft()\r\n");
                     else             btPrint("[MISSION] Action: turnRight()\r\n");

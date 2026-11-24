@@ -44,8 +44,8 @@
 #define LINE_LEVEL   GPIO_PIN_SET   /* level a sensor outputs when it sees the BLACK line.
                                        Flip to GPIO_PIN_RESET if it's the opposite */
 #define IR_DEBUG     1              /* 1 = send sensor states while line following (blocks the loop
-                                       ~30-45 ms per print). The pattern logger (L key) is better. */
-#define TUNING_KEYS  1              /* 1 = live tuning enabled, 0 = disabled */
+                                       ~30-45 ms per print).*/
+#define TUNING_KEYS  1              /* 1 = live tuning enabled, 0 = disabled*/
 
 #define OUTER_JUNCTION_ONLY 0      /* 1 = S0/S4 never steer, PD uses S1-S3
                                        0 = all five sensors steer (assumes equal sensor spacing) */
@@ -61,7 +61,7 @@
 #define KP_DEFAULT         75.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
 #define HARD_ERROR         3.0f
 #endif
-#define KD_DEFAULT         0.80f     //Damper
+#define KD_DEFAULT         1.00f     //Damper
 #define CONTROL_PERIOD_MS  10U
 #define PWM_MAX            700
 
@@ -73,7 +73,7 @@
 #define CORNER_PIVOT_SPEED 360
 
 // Side bars (branches / corners)
-#define BAR_LOCKOUT_MS     250U     // ignore a new bar event this soon after the last one
+#define BAR_LOCKOUT_MS     250U     // ignore a new bar event for 250ms after the last one
 #define MASK_EXTRA_MS      60U      // keep ignoring the bar-side sensor this long after the bar ends
 
 // Ambiguous patterns (e.g. while sweeping across lines during a sharp turn)
@@ -81,10 +81,6 @@
 
 // Side branch (T-junction) turn, used by mission.c
 #define BRANCH_FWD_MS      250U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
-
-// Pattern logger
-#define LOG_SIZE           300U     // entries kept (newest overwrite the oldest)
-#define LOG_STABLE_MS      5U       // a pattern must hold this long to be recorded (filters flicker)
 
 typedef struct
 {
@@ -98,42 +94,33 @@ static const int8_t   irWeight[IR_COUNT] = { -4, -2, 0, 2, 4 };
 
 static float kp = KP_DEFAULT;
 static float kd = KD_DEFAULT;
-static uint32_t cornerFwdMs = CORNER_FWD_MS;
-static uint32_t branchFwdMs = BRANCH_FWD_MS;
+static uint32_t cornerFwdMs = CORNER_FWD_MS; //KC
+static uint32_t branchFwdMs = BRANCH_FWD_MS; //KJ
 
-static int lastDir = 0;                /* -1 = left; 1 = right; 0 = centred / unknown */
+static int lastDir = 0;   /* -1 = left; 1 = right; 0 = centred / unknown */ //Remembers the most recently selected steering direction
 static uint8_t holdOk = 0;             /* 1 = line was centred or on a gentle edge, keep going straight first */
-static uint32_t lostStart = 0;
-static uint8_t recovering = 0;
+static uint32_t lostStart = 0; //Timestamp when the current line-loss period began
+static uint8_t recovering = 0; //Indicates the robot is in a line-loss recovery period
 
 // Ambiguous pattern timer
-static uint8_t  ambiguous = 0;
-static uint32_t ambigStart = 0;
+static uint8_t  ambiguous = 0; //Indicates an ambiguous sensor pattern is currently being tracked
+static uint32_t ambigStart = 0; //Timestamp when the ambiguous pattern started
 
 // Corner counting
-static uint8_t cornerCount = 0;        /* corners turned so far */
+static uint8_t cornerCount = 0;        /* Number of completed corner pivots	 */
 static uint8_t cornerPivoting = 0;     /* 1 = currently pivoting at a corner */
 
 // Side bar tracking
 static int8_t  pendingBar = 0;         /* event waiting for mission.c: -1 left, +1 right */
-static int8_t  prevBarNow = 0;
+static int8_t  prevBarNow = 0; //Remembers the bar classification from the previous controller update ie. corner or branch
 static int8_t  barLatch = 0;           /* side of the bar we are crossing / just crossed (kept through an all-white corner) */
-static uint32_t lastBarEvent = 0;
-static uint32_t lastBarOn = 0;
+static uint32_t lastBarEvent = 0; //Timestamp of the last accepted bar event
+static uint32_t lastBarOn = 0; //Timestamp when the bar was last detected
 
 // Controller memory
-static float previousError = 0;
-static uint8_t previousValid = 0;
-static uint32_t lastControlMs = 0;
-
-// Pattern logger memory
-static uint32_t logTime[LOG_SIZE];
-static uint8_t  logPat[LOG_SIZE];
-static uint16_t logHead = 0;           /* next slot to write */
-static uint16_t logCount = 0;          /* entries stored (max LOG_SIZE) */
-static uint8_t  logCand = 0xFF;
-static uint32_t logCandSince = 0;
-static uint8_t  logLast = 0xFF;
+static float previousError = 0; //Stores the previous PD line-position error
+static uint8_t previousValid = 0; //Indicates whether previousError is valid to be used for derivative calculation
+static uint32_t lastControlMs = 0; //Time of the most recent controller update
 
 //Read IR Sensor. Return 1 if black is detected
 static inline uint8_t irRead(GPIO_TypeDef *port, uint16_t pin)
@@ -175,68 +162,6 @@ int8_t lineBarEvent(void)
 
 uint8_t  lineFollowCorners(void)      { return cornerCount; }
 uint32_t lineFollowBranchFwdMs(void)  { return branchFwdMs; }
-
-/* ---------------- Pattern logger ---------------- */
-
-void lineLogClear(void)
-{
-    logHead = 0;
-    logCount = 0;
-    logCand = 0xFF;
-    logLast = 0xFF;
-}
-
-// Call every main-loop pass: records a pattern once it has been stable for LOG_STABLE_MS
-void lineLogTick(void)
-{
-    const uint8_t p = lineReadBits();
-    const uint32_t now = HAL_GetTick();
-
-    if (p != logCand)
-    {
-        logCand = p;
-        logCandSince = now;
-        return;
-    }
-
-    if (p != logLast && (now - logCandSince) >= LOG_STABLE_MS)
-    {
-        logLast = p;
-        logTime[logHead] = logCandSince;
-        logPat[logHead] = p;
-        logHead = (uint16_t)((logHead + 1U) % LOG_SIZE);
-        if (logCount < LOG_SIZE) logCount++;
-    }
-}
-
-// Prints the log, oldest first. Each line: pattern (S0..S4) and ms since the previous entry.
-// Stop the robot first: sending takes about 2 seconds for a full log.
-void lineLogDump(void)
-{
-    char line[64];
-    uint16_t idx = (uint16_t)((logHead + LOG_SIZE - logCount) % LOG_SIZE);
-    uint32_t prev = logTime[idx];
-
-    snprintf(line, sizeof(line), "[LOG] %u entries (pattern S0..S4, +ms)\r\n", (unsigned)logCount);
-    btPrint(line);
-
-    for (uint16_t n = 0; n < logCount; n++)
-    {
-        char pat[IR_COUNT + 1];
-        for (uint8_t i = 0; i < IR_COUNT; i++)
-            pat[i] = ((logPat[idx] >> i) & 1U) ? '1' : '0';
-        pat[IR_COUNT] = '\0';
-
-        snprintf(line, sizeof(line), "%s +%lu\r\n", pat, (unsigned long)(logTime[idx] - prev));
-        btPrint(line);
-
-        prev = logTime[idx];
-        idx = (uint16_t)((idx + 1U) % LOG_SIZE);
-    }
-
-    btPrint("[LOG] end\r\n");
-    lineLogClear();
-}
 
 //Send sensor status through bluetooth (only when IR_DEBUG is 1)
 static void btReportIR(uint8_t bits, const char *action, int leftSpeed, int rightSpeed)
@@ -611,7 +536,6 @@ void lineFollowReset(void)
 
 	    // Pass the speeds to the debug function
 	    btReportIR(raw, action, actLeft, actRight);
-	    OLED_UI_SetStatus("LINE FOLLOWING");
 	}
 
 /* ---------------------------------------------------------------------------
@@ -622,9 +546,6 @@ void lineFollowReset(void)
  *   KD0.35;      Kd = 0.35
  *   KC550;       corner straight-ahead time, ms
  *   KJ650;       branch straight-ahead time, ms
- *   KA400;       time from the end of the 2nd corner to the first branch, ms   (mission backup)
- *   KB1000;      time between branches, ms                                      (mission backup)
- *   KW350;       +/- window around the expected branch time, ms                 (mission backup)
  *   K;           shows the values
  *
  * pidTuneKey() must be the FIRST thing called in handleBtCommand() in main.c.
@@ -647,11 +568,9 @@ static void printGains(void)
     /* print without %f (newlib-nano has no float printf by default) */
     int kdHundredths = (int)(kd * 100.0f + 0.5f);
     snprintf(line, sizeof(line),
-             "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu Branch=%lu T1=%lu Ts=%lu Win=%lu ms\r\n",
+             "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu Branch=%lu ms\r\n",
              (int)(kp + 0.5f), kdHundredths / 100, kdHundredths % 100,
-             (unsigned long)cornerFwdMs, (unsigned long)branchFwdMs,
-             (unsigned long)missionGetParam('A'), (unsigned long)missionGetParam('B'),
-             (unsigned long)missionGetParam('W'));
+             (unsigned long)cornerFwdMs, (unsigned long)branchFwdMs);
     btPrint(line);
 }
 
@@ -714,21 +633,21 @@ uint8_t pidTuneKey(char c)
 
     entryTick = HAL_GetTick();
 
-    if (entryState == 1)                       /* after K: expect P, D, C, J, A, B or W */
+    if (entryState == 1)                       /* after K: expect P, D, C, J */
     {
         if (isEnd) { entryState = 0; printGains(); return 1; }
 
         char up = c;
         if (up >= 'a' && up <= 'z') up = (char)(up - 32);
 
-        if (up == 'P' || up == 'D' || up == 'C' || up == 'J' || up == 'A' || up == 'B' || up == 'W')
+        if (up == 'P' || up == 'D' || up == 'C' || up == 'J')
         {
             entryTarget = up;
         }
         else
         {
             entryState = 0;
-            btPrint("[TUNE] KP KD KC KJ KA KB KW then a number and ;\r\n");
+            btPrint("[TUNE] KP KD KC KJ then a number and ;\r\n");
             return 1;
         }
         entryState = 2;
@@ -750,8 +669,6 @@ uint8_t pidTuneKey(char c)
         else if (entryTarget == 'D') kd = (v > KD_MAX) ? KD_MAX : v;
         else if (entryTarget == 'C') cornerFwdMs = (uint32_t)((v > MS_MAX) ? MS_MAX : v);
         else if (entryTarget == 'J') branchFwdMs = (uint32_t)((v > MS_MAX) ? MS_MAX : v);
-        else                         missionSetParam(entryTarget, (uint32_t)((v > MS_MAX) ? MS_MAX : v));
-
         printGains();
         return 1;
     }

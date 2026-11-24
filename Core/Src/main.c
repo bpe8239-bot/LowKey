@@ -36,7 +36,6 @@
  *   1-9 = speed (1 slowest, 9 fastest)
  *   ? = show help. Manual movement times out after 1 seconds without a new command.
  *   N = Line Following ONLY
- *   L = Line Logging
  *   M = Basic Map Loop
  *   K = Show KP KD value
  *
@@ -48,11 +47,6 @@
  *  KC and KJ are timed straight-ahead drives, so they’re technically time-based.
  *  They sit in this group because the junction-counting method needs them,
  *  whether or not the backup is enabled.
- *
- *  	Time-based (backup for the counting) (Not used)
- *  KA	=  Expected time from the end of the 2nd corner to the first branch bar
- *  KB	=  Expected time between branch bars
- *  KW	=  ± window around each expected time
  *
  *
  */
@@ -360,19 +354,18 @@ static void handleBtCommand(char c)
     // --- Standard Driving & Mission Commands (Always Available) ---
     if (c >= '1' && c <= '9')
     {
-        speed = 100 + (c - '1') * 87;  /* 1..9 -> 300..996 */
+        speed = 100 + (c - '1') * 87;  /* 1..9 -> 100..996 */
         lastCmdTime = HAL_GetTick();
         snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
         btPrint(line);
         return;
     }
-    if (c == 'M') { autoMode = 1; missionStart(); OLED_UI_SetMode("MISSION"); btPrint("[MODE] MISSION STARTS\r\n"); return; }
-    if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); OLED_UI_SetMode("LINE FOLLOWING"); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); return; }
+    if (c == 'M') { autoMode = 1; missionStart(); OLED_UI_SetMode("MISSION"); OLED_UI_SetStatus("MISSION RUNNING"); btPrint("[MODE] MISSION STARTS\r\n"); return; }
+    if (c == 'N' || c == 'n') { autoMode = 2; lineFollowReset(); OLED_UI_SetMode("LINE FOLLOWING"); OLED_UI_SetStatus("LINE FOLLOWING"); btPrint("[MODE] LINE FOLLOW ONLY\r\n"); return; }
     if (c == 'X' || c == 'x' || c == ' ') { autoMode = 0; cmd = 'X'; stopMotors(); OLED_UI_SetMode("MANUAL"); OLED_UI_SetStatus("READY"); btPrint("[MOTOR] STOP\r\n"); return; }
     if (c == '?' || c == 'H' || c == 'h') { btPrint("[HELP] W/S/A/D move; X stop; 1-9 speed; T/t debug on/off; (Debug: m/r/g/b/o/p+val, v, c, z)\r\n"); return; }
     if (c == 'F' || c == 'f') { Claw_Open(); OLED_UI_Claw("OPEN"); btPrint("[CLAW] OPEN\r\n"); return; }
     if (c == 'G') { Claw_Close(); OLED_UI_Claw("CLOSE"); btPrint("[CLAW] CLOSE\r\n"); return; }
-    if (c == 'L' || c == 'l') { autoMode = 0; cmd = 'X'; stopMotors(); lineLogDump(); return; }
 
     // Movement (W/A/S/D)
     if (c == 'W' || c == 'w') motion = "FORWARD";
@@ -474,7 +467,6 @@ int main(void)
     {
       handleBtCommand((char)received);
     }
-    lineLogTick();
 
     if (autoMode == 1) //Basic Map Loop
         {
@@ -482,6 +474,7 @@ int main(void)
           {
             autoMode = 0;
             cmd = 'X';
+            OLED_UI_SetMode("MANUAL");
             btPrint("[MODE] MANUAL - W/A/S/D drive, F/G claw\r\n");
           }
         }
