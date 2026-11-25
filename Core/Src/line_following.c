@@ -67,10 +67,10 @@
 
 // Dashed line gap + 90 degree corner
 #define GAP_CROSS_MS       500U   //not called  // straight-ahead hold when the line was centred (dashed gap)
-#define CORNER_FWD_MS      50U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
+#define CORNER_FWD_MS      90U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
-#define RECOVERY_MIN_SPEED 300      // slowest pivot speed
-#define CORNER_PIVOT_SPEED 360
+#define RECOVERY_MIN_SPEED 310      // slowest pivot speed
+#define CORNER_PIVOT_SPEED 300
 
 // Side bars (branches / corners)
 #define BAR_LOCKOUT_MS     250U     // ignore a new bar event for 250ms after the last one
@@ -80,7 +80,7 @@
 #define AMBIG_HOLD_MS      100U     // keep the last motor command this long before stopping
 
 // Side branch (T-junction) turn, used by mission.c
-#define BRANCH_FWD_MS      250U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
+#define BRANCH_FWD_MS      320U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
 
 typedef struct
 {
@@ -96,6 +96,7 @@ static float kp = KP_DEFAULT;
 static float kd = KD_DEFAULT;
 static uint32_t cornerFwdMs = CORNER_FWD_MS; //KC
 static uint32_t branchFwdMs = BRANCH_FWD_MS; //KJ
+uint32_t cornerSpeed = CORNER_PIVOT_SPEED;
 
 static int lastDir = 0;   /* -1 = left; 1 = right; 0 = centred / unknown */ //Remembers the most recently selected steering direction
 static uint8_t holdOk = 0;      //Not called  /* 1 = line was centred or on a gentle edge, keep going straight first */
@@ -259,8 +260,8 @@ void lineFollow(int speed)
 	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
 	const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
 #else
-	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
-	const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
+	const uint8_t leftBar  = (s[0] && (s[1] && s[2])) ? 1U : 0U;
+	const uint8_t rightBar = (s[4] && (s[3] && s[2])) ? 1U : 0U;
 #endif
 	int8_t barNow = 0;
 	if (leftBar && rightBar) barNow = 2;
@@ -570,9 +571,9 @@ static void printGains(void)
     /* print without %f (newlib-nano has no float printf by default) */
     int kdHundredths = (int)(kd * 100.0f + 0.5f);
     snprintf(line, sizeof(line),
-             "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu Branch=%lu ms\r\n",
+             "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu Branch=%lu ms CornerSpeed=%i\r\n",
              (int)(kp + 0.5f), kdHundredths / 100, kdHundredths % 100,
-             (unsigned long)cornerFwdMs, (unsigned long)branchFwdMs);
+             (unsigned long)cornerFwdMs, (unsigned long)branchFwdMs), (int)cornerSpeed;
     btPrint(line);
 }
 
@@ -642,7 +643,7 @@ uint8_t pidTuneKey(char c)
         char up = c;
         if (up >= 'a' && up <= 'z') up = (char)(up - 32);
 
-        if (up == 'P' || up == 'D' || up == 'C' || up == 'J')
+        if (up == 'P' || up == 'D' || up == 'C' || up == 'J' || up == 'A')
         {
             entryTarget = up;
         }
@@ -671,6 +672,7 @@ uint8_t pidTuneKey(char c)
         else if (entryTarget == 'D') kd = (v > KD_MAX) ? KD_MAX : v;
         else if (entryTarget == 'C') cornerFwdMs = (uint32_t)((v > MS_MAX) ? MS_MAX : v);
         else if (entryTarget == 'J') branchFwdMs = (uint32_t)((v > MS_MAX) ? MS_MAX : v);
+        else if (entryTarget == 'A') cornerSpeed = (uint32_t)((v > 700) ? MS_MAX : v);
         printGains();
         return 1;
     }
