@@ -364,7 +364,7 @@ void lineFollow(int speed)
 		const uint8_t afterBar = (barLatch != 0) ? 1U : 0U;
 		const uint32_t lostMs = now - lostStart;
 
-		if (afterBar || cornerCount > 1)
+		if (afterBar || cornerCount > 0)
 		{
 			action = "CORNER - SEEN";
 			if (!cornerPivoting && lostMs < cornerFwdMs)
