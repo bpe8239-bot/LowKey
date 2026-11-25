@@ -18,7 +18,7 @@
 #define END_BAR_TIMEOUT_MS       8000U
 #define END_BAR_CONFIRM_MS       30U
 #define PIVOT_MIN_SPEED          400
-#define CENTRE_BIT               0x04U
+#define CENTRE_BIT               0x04U // IR read 00100
 #define END_BAR_BITS             0x15U
 #define BRANCH_SPEED             390
 #define BRANCH_MIN_SPEED         380
@@ -232,7 +232,7 @@ uint8_t missionTick(int speed)
                 	{
                 		brState = BR_FWD;
                 		stateStart = now;
-                		btPrint("[MISSION] Target found! Entering BR_FWD.\r\n");
+                		btPrint("Target found! Entering BR_FWD.\r\n");
                 	}
 
                 }
@@ -253,7 +253,7 @@ uint8_t missionTick(int speed)
                     brState = BR_PIVOT;
                     stateStart = now;
                     sawWhite = 0;
-                    btPrint("[MISSION] FWD complete. Turning into branch...\r\n");
+                    btPrint("Turning into branch\r\n");
                     if (s->side < 0) btPrint("[MISSION] Action: turnLeft()\r\n");
                     else             btPrint("[MISSION] Action: turnRight()\r\n");
                 }
@@ -276,7 +276,7 @@ uint8_t missionTick(int speed)
                     btPrint(line);
                 }
 
-                // Debug: Log the exit condition
+                // Debug: Log the exit condition (Exit from BR pivot)
                 if ((now - stateStart) >= BRANCH_PIVOT_BLIND_MS && sawWhite && (bits & CENTRE_BIT))
                 {
                     snprintf(line, sizeof(line), "[PIVOT] Found branch line! (bits=%d). Exiting pivot.\r\n", bits);

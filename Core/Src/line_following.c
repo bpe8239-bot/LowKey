@@ -66,7 +66,7 @@
 #define PWM_MAX            700
 
 // Dashed line gap + 90 degree corner
-#define GAP_CROSS_MS       500U     // straight-ahead hold when the line was centred (dashed gap)
+#define GAP_CROSS_MS       500U   //not called  // straight-ahead hold when the line was centred (dashed gap)
 #define CORNER_FWD_MS      50U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 300      // slowest pivot speed
@@ -98,7 +98,7 @@ static uint32_t cornerFwdMs = CORNER_FWD_MS; //KC
 static uint32_t branchFwdMs = BRANCH_FWD_MS; //KJ
 
 static int lastDir = 0;   /* -1 = left; 1 = right; 0 = centred / unknown */ //Remembers the most recently selected steering direction
-static uint8_t holdOk = 0;             /* 1 = line was centred or on a gentle edge, keep going straight first */
+static uint8_t holdOk = 0;      //Not called  /* 1 = line was centred or on a gentle edge, keep going straight first */
 static uint32_t lostStart = 0; //Timestamp when the current line-loss period began
 static uint8_t recovering = 0; //Indicates the robot is in a line-loss recovery period
 
@@ -238,305 +238,307 @@ void lineFollowReset(void)
 }
 
 // Automatic line following with PD control
-	void lineFollow(int speed)
+void lineFollow(int speed)
+{
+	uint32_t now = HAL_GetTick();
+	uint32_t elapsed = now - lastControlMs;
+
+	// Update controller approximately every 10 ms
+	if (elapsed < CONTROL_PERIOD_MS)
+		return;
+
+	lastControlMs = now;
+
+	const uint8_t raw = lineReadBits();
+	uint8_t s[IR_COUNT];
+	for (uint8_t i = 0; i < IR_COUNT; i++)
+		s[i] = (uint8_t)((raw >> i) & 1U);
+
+	/* ---- Side bar detection by PATTERN ---- */
+#if OUTER_JUNCTION_ONLY
+	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
+	const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
+#else
+	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
+	const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
+#endif
+	int8_t barNow = 0;
+	if (leftBar && rightBar) barNow = 2;
+	else if (leftBar)        barNow = -1;
+	else if (rightBar)       barNow = 1;
+
+	if (barNow == -1 || barNow == 1)
 	{
-	    uint32_t now = HAL_GetTick();
-	    uint32_t elapsed = now - lastControlMs;
-
-	    // Update controller approximately every 10 ms
-	    if (elapsed < CONTROL_PERIOD_MS)
-	        return;
-
-	    lastControlMs = now;
-
-	    const uint8_t raw = lineReadBits();
-	    uint8_t s[IR_COUNT];
-	    for (uint8_t i = 0; i < IR_COUNT; i++)
-	        s[i] = (uint8_t)((raw >> i) & 1U);
-
-	    /* ---- Side bar detection by PATTERN ---- */
-	#if OUTER_JUNCTION_ONLY
-	    const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
-	    const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
-	#else
-	    const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
-	    const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
-	#endif
-	    int8_t barNow = 0;
-	    if (leftBar && rightBar) barNow = 2;
-	    else if (leftBar)        barNow = -1;
-	    else if (rightBar)       barNow = 1;
-
-	    if (barNow == -1 || barNow == 1)
-	    {
-	        if (prevBarNow == 0 && (now - lastBarEvent) >= BAR_LOCKOUT_MS)
-	        {
-	            pendingBar = barNow;
-	            lastBarEvent = now;
-	        }
-	        barLatch = barNow;
-	        lastBarOn = now;
-	    }
-	    else if (barNow == 2)
-	    {
-	        barLatch = 0;
-	    }
-	    prevBarNow = barNow;
-
-	#if OUTER_JUNCTION_ONLY
-	    s[0] = 0;
-	    s[4] = 0;
-	#endif
-
-	    /* ---- Ignore the steering sensor on the bar side while the bar passes ---- */
-	    uint8_t maskActive = 0;
-	    if (barLatch != 0 && (barNow == barLatch || (now - lastBarOn) < MASK_EXTRA_MS))
-	        maskActive = 1;
-
-	    if (maskActive)
-	    {
-	#if OUTER_JUNCTION_ONLY
-	        if (barLatch < 0) { s[1] = 0; }
-	        else              { s[3] = 0; }
-	#else
-	        if (barLatch < 0) { s[0] = 0; s[1] = 0; }
-	        else              { s[3] = 0; s[4] = 0; }
-	#endif
-	    }
-
-	    uint8_t count = 0;
-	    for (uint8_t i = 0; i < IR_COUNT; i++)
-	        count += s[i];
-
-	    if (barLatch != 0 && !maskActive && !cornerPivoting && count > 0)
-	        barLatch = 0;
-
-	    if (barLatch != 0)
-	    {
-	        lastDir = barLatch;
-	        holdOk = 1;
-	    }
-
-	    const uint8_t amb = (count > 0) ? isAmbiguous(s) : 0U;
-	    if (!amb) ambiguous = 0;
-
-	    const char *action = "PD";
-	    int actLeft = 0;   // <--- Track actual Left PWM
-	    int actRight = 0;  // <--- Track actual Right PWM
-
-	    if (count > 0)
-	    {
-	    	if (cornerPivoting && s[2])
-	    	{
-	    	    cornerCount++;
-	    	    cornerPivoting = 0;
-	    	    barLatch = 0;
-	    	    recovering = 0;
-	    	}
-	    	else if (!cornerPivoting && count > 0)
-	    	{
-	    	    recovering = 0;
-	    	}
-	    }
-
-	    // Wide bar = both outer sensors on (crossing or end bar)
-	    if ((raw & 0x11U) == 0x11U)
-	    {
-	        forward(speed);
-	        actLeft = speed; actRight = speed; // Track
-	        previousValid = 0;
-	        lastDir = 0;
-	        holdOk = 1;
-	        action = "CROSSING";
-	    }
-
-	    // All white (00000): either right after a corner bar, or a dotted-line gap / brief dropout
-	    else if (count == 0)
-	    {
-	        previousValid = 0;
-
-	        if (!recovering)
-	        {
-	            lostStart = now;
-	            recovering = 1;
-	        }
-
-	        const uint8_t afterBar = (barLatch != 0) ? 1U : 0U;
-	        const uint32_t lostMs = now - lostStart;
-
-	        if (afterBar || cornerCount > 0)
-	        {
-	        	action = "CORNER - SEEN";
-	            if (!cornerPivoting && lostMs < cornerFwdMs)
-	            {
-	                forward(speed);
-	                actLeft = speed; actRight = speed; // Track
-	                action = "CORNER - FORWARD";
-	            }
-	            else if ((lostMs - cornerFwdMs) >= PIVOT_TIMEOUT_MS)
-	            {
-	                stopMotors();
-	                actLeft = 0; actRight = 0; // Track
-	                barLatch = 0;
-	                cornerPivoting = 0;
-	                action = "CORNER - TIMEOUT";
-	            }
-	            else
-	            {
-	                cornerPivoting = 1;
-	                if (lastDir == -1)
-	                {
-	                    turnLeft(CORNER_PIVOT_SPEED);
-	                    actLeft = -CORNER_PIVOT_SPEED; actRight = CORNER_PIVOT_SPEED; // Track
-	                    action = "CORNER - PIVOT LEFT";
-	                }
-	                else
-	                {
-	                    turnRight(CORNER_PIVOT_SPEED);
-	                    actLeft = CORNER_PIVOT_SPEED; actRight = -CORNER_PIVOT_SPEED; // Track
-	                    action = "CORNER - PIVOT RIGHT";
-	                }
-	            }
-	        }
-	        else
-	        {
-	            if (lostMs >= PIVOT_TIMEOUT_MS)
-	            {
-	                stopMotors();
-	                actLeft = 0; actRight = 0; // Track
-	                action = "LOST - TIMEOUT";
-	            }
-	            else
-	            {
-	                int slowSpeed = speed / 2;
-	                if (slowSpeed < RECOVERY_MIN_SPEED)
-	                    slowSpeed = RECOVERY_MIN_SPEED;
-
-	                forward(slowSpeed);
-	                actLeft = slowSpeed; actRight = slowSpeed; // Track
-	                action = "GAP / CREEP FORWARD";
-	            }
-	        }
-	    }
-
-	    else if (cornerPivoting)
-	    {
-	        if ((now - lostStart) >= (cornerFwdMs + PIVOT_TIMEOUT_MS))
-	        {
-	            stopMotors();
-	            actLeft = 0; actRight = 0; // Track
-	            barLatch = 0;
-	            cornerPivoting = 0;
-	            action = "CORNER - TIMEOUT";
-	        }
-	        else
-	        {
-	            if (lastDir == -1) {
-	                turnLeft(CORNER_PIVOT_SPEED);
-	                actLeft = -CORNER_PIVOT_SPEED; actRight = CORNER_PIVOT_SPEED; // Track
-	            }
-	            else {
-	                turnRight(CORNER_PIVOT_SPEED);
-	                actLeft = CORNER_PIVOT_SPEED; actRight = -CORNER_PIVOT_SPEED; // Track
-	            }
-	            action = "CORNER - PIVOT (LINE SEEN)";
-	        }
-	    }
-	    else if (amb)
-	    {
-	        previousValid = 0;
-	        if (!ambiguous)
-	        {
-	            ambiguous = 1;
-	            ambigStart = now;
-	        }
-
-	        if ((now - ambigStart) >= AMBIG_HOLD_MS)
-	        {
-	            stopMotors();
-	            actLeft = 0; actRight = 0; // Track
-	            action = "AMBIGUOUS - STOP";
-	        }
-	        else
-	        {
-	            action = "AMBIGUOUS - HOLD";
-	        }
-	    }
-	    else
-	    {
-	        float sum = 0.0f;
-	        for (uint8_t i = 0; i < IR_COUNT; i++)
-	            sum += (float)irWeight[i] * (float)s[i];
-
-	        const float error = sum / (float)count;
-
-	        if (error <= -HARD_ERROR)
-	        {
-	            turnLeft(speed);
-	            actLeft = -speed; actRight = speed; // Track
-	            lastDir = -1;
-	            holdOk = 0;
-	            previousValid = 0;
-	            action = "HARD LEFT";
-	        }
-	        else if (error >= HARD_ERROR)
-	        {
-	            turnRight(speed);
-	            actLeft = speed; actRight = -speed; // Track
-	            lastDir = 1;
-	            holdOk = 0;
-	            previousValid = 0;
-	            action = "HARD RIGHT";
-	        }
-	        else
-	        {
-	            float dt = elapsed / 1000.0f;
-	            float derivative = 0.0f;
-
-	            if (previousValid)
-	            {
-	                derivative = (error - previousError) / dt;
-	            }
-
-	            float correction = kp * error + kd * derivative;
-
-	            int leftSpeed = clampSpeed((int)(speed + correction));
-	            int rightSpeed = clampSpeed((int)(speed - correction));
-
-	            setLeft(leftSpeed);
-	            setRight(rightSpeed);
-	            actLeft = leftSpeed; actRight = rightSpeed; // Track
-
-	            previousError = error;
-	            previousValid = 1;
-	            holdOk = 1;
-
-	            if (barLatch != 0)
-	            {
-	                lastDir = barLatch;
-	                action = "PD (BAR)";
-	            }
-	            else if (error < 0.0f)
-	            {
-	                lastDir = -1;
-	                action = "PD LEFT";
-	            }
-	            else if (error > 0.0f)
-	            {
-	                lastDir = 1;
-	                action = "PD RIGHT";
-	            }
-	            else
-	            {
-	                lastDir = 0;
-	                action = "PD CENTER";
-	            }
-	        }
-	    }
-
-	    // Pass the speeds to the debug function
-	    btReportIR(raw, action, actLeft, actRight);
+		if (prevBarNow == 0 && (now - lastBarEvent) >= BAR_LOCKOUT_MS)
+		{
+			pendingBar = barNow;
+			lastBarEvent = now;
+		}
+		barLatch = barNow;
+		lastBarOn = now;
 	}
+	else if (barNow == 2)
+	{
+		barLatch = 0;
+	}
+	prevBarNow = barNow;
+
+#if OUTER_JUNCTION_ONLY
+	s[0] = 0;
+	s[4] = 0;
+#endif
+
+	/* ---- Ignore the steering sensor on the bar side while the bar passes ---- */
+	uint8_t maskActive = 0;
+	if (barLatch != 0 && (barNow == barLatch || (now - lastBarOn) < MASK_EXTRA_MS))
+		maskActive = 1;
+
+	if (maskActive)
+	{
+#if OUTER_JUNCTION_ONLY
+		if (barLatch < 0) { s[1] = 0; }
+		else              { s[3] = 0; }
+#else
+		if (barLatch < 0) { s[0] = 0; s[1] = 0; }
+		else              { s[3] = 0; s[4] = 0; }
+#endif
+	}
+
+	uint8_t count = 0;
+	for (uint8_t i = 0; i < IR_COUNT; i++)
+		count += s[i];
+
+	if (barLatch != 0 && !maskActive && !cornerPivoting && count > 0)
+		barLatch = 0;
+
+	if (barLatch != 0)
+	{
+		lastDir = barLatch;
+		holdOk = 1;
+	}
+
+	const uint8_t amb = (count > 0) ? isAmbiguous(s) : 0U;
+	if (!amb) ambiguous = 0;
+
+	const char *action = "PD";
+	int actLeft = 0;   // <--- Track actual Left PWM
+	int actRight = 0;  // <--- Track actual Right PWM
+
+	if (count > 0) //Not all white
+	{
+		if (cornerPivoting && s[2])
+		{
+			cornerCount++;
+			cornerPivoting = 0;
+			barLatch = 0;
+			recovering = 0;
+		}
+		else if (!cornerPivoting && count > 0)
+		{
+	    	    recovering = 0;
+		}
+	}
+
+	// Wide bar = both outer sensors on (crossing or end bar)
+	if ((raw & 0x11U) == 0x11U)
+	{
+		forward(speed);
+		actLeft = speed; actRight = speed; // Track
+		previousValid = 0;
+		lastDir = 0;
+		holdOk = 1;
+		action = "CROSSING";
+	}
+
+	// All white (00000): either right after a corner bar, or a dotted-line gap / brief dropout
+	else if (count == 0)
+	{
+		previousValid = 0;
+
+		if (!recovering)
+		{
+			lostStart = now;
+			recovering = 1;
+		}
+
+		const uint8_t afterBar = (barLatch != 0) ? 1U : 0U;
+		const uint32_t lostMs = now - lostStart;
+
+		if (afterBar || cornerCount > 1)
+		{
+			action = "CORNER - SEEN";
+			if (!cornerPivoting && lostMs < cornerFwdMs)
+			{
+				forward(speed);
+				actLeft = speed; actRight = speed; // Track
+				action = "CORNER - FORWARD";
+			}
+			else if ((lostMs - cornerFwdMs) >= PIVOT_TIMEOUT_MS)
+			{
+				stopMotors();
+				actLeft = 0; actRight = 0; // Track
+				barLatch = 0;
+				cornerPivoting = 0;
+				action = "CORNER - TIMEOUT";
+			}
+			else
+			{
+				cornerPivoting = 1;
+				if (lastDir == -1)
+				{
+					turnLeft(CORNER_PIVOT_SPEED);
+					actLeft = -CORNER_PIVOT_SPEED; actRight = CORNER_PIVOT_SPEED; // Track
+					action = "CORNER - PIVOT LEFT";
+				}
+				else
+				{
+					turnRight(CORNER_PIVOT_SPEED);
+					actLeft = CORNER_PIVOT_SPEED; actRight = -CORNER_PIVOT_SPEED; // Track
+					action = "CORNER - PIVOT RIGHT";
+				}
+			}
+		}
+		else
+		{
+			if (lostMs >= PIVOT_TIMEOUT_MS)
+			{
+				stopMotors();
+				actLeft = 0; actRight = 0; // Track
+				action = "LOST - TIMEOUT";
+			}
+			else
+			{
+				int slowSpeed = speed / 2;
+				if (slowSpeed < RECOVERY_MIN_SPEED)
+					slowSpeed = RECOVERY_MIN_SPEED;
+
+				forward(slowSpeed);
+				actLeft = slowSpeed; actRight = slowSpeed; // Track
+				action = "GAP / CREEP FORWARD";
+			}
+		}
+	}
+
+	else if (cornerPivoting)
+	{
+		if ((now - lostStart) >= (cornerFwdMs + PIVOT_TIMEOUT_MS))
+		{
+			stopMotors();
+			actLeft = 0; actRight = 0; // Track
+			barLatch = 0;
+			cornerPivoting = 0;
+			action = "CORNER - TIMEOUT";
+		}
+		else
+		{
+			if (lastDir == -1)
+			{
+				turnLeft(CORNER_PIVOT_SPEED);
+				actLeft = -CORNER_PIVOT_SPEED; actRight = CORNER_PIVOT_SPEED; // Track
+			}
+			else
+			{
+				turnRight(CORNER_PIVOT_SPEED);
+				actLeft = CORNER_PIVOT_SPEED; actRight = -CORNER_PIVOT_SPEED; // Track
+			}
+			action = "CORNER - PIVOT (LINE SEEN)";
+		}
+	}
+	else if (amb)
+	{
+		previousValid = 0;
+		if (!ambiguous)
+		{
+			ambiguous = 1;
+			ambigStart = now;
+		}
+
+		if ((now - ambigStart) >= AMBIG_HOLD_MS)
+		{
+			stopMotors();
+			actLeft = 0; actRight = 0; // Track
+			action = "AMBIGUOUS - STOP";
+		}
+		else
+		{
+			action = "AMBIGUOUS - HOLD";
+		}
+	}
+	else
+	{
+		float sum = 0.0f;
+		for (uint8_t i = 0; i < IR_COUNT; i++)
+			sum += (float)irWeight[i] * (float)s[i];
+
+		const float error = sum / (float)count;
+
+		if (error <= -HARD_ERROR)
+		{
+			turnLeft(speed);
+			actLeft = -speed; actRight = speed; // Track
+			lastDir = -1;
+			holdOk = 0;
+			previousValid = 0;
+			action = "HARD LEFT";
+		}
+		else if (error >= HARD_ERROR)
+		{
+			turnRight(speed);
+			actLeft = speed; actRight = -speed; // Track
+			lastDir = 1;
+			holdOk = 0;
+			previousValid = 0;
+			action = "HARD RIGHT";
+		}
+		else
+		{
+			float dt = elapsed / 1000.0f;
+			float derivative = 0.0f;
+
+			if (previousValid)
+			{
+				derivative = (error - previousError) / dt;
+			}
+
+			float correction = kp * error + kd * derivative;
+
+			int leftSpeed = clampSpeed((int)(speed + correction));
+			int rightSpeed = clampSpeed((int)(speed - correction));
+
+			setLeft(leftSpeed);
+			setRight(rightSpeed);
+			actLeft = leftSpeed; actRight = rightSpeed; // Track
+
+			previousError = error;
+			previousValid = 1;
+			holdOk = 1;
+
+			if (barLatch != 0)
+			{
+				lastDir = barLatch;
+				action = "PD (BAR)";
+			}
+			else if (error < 0.0f)
+			{
+				lastDir = -1;
+				action = "PD LEFT";
+			}
+			else if (error > 0.0f)
+			{
+				lastDir = 1;
+				action = "PD RIGHT";
+			}
+			else
+			{
+				lastDir = 0;
+				action = "PD CENTER";
+			}
+		}
+	}
+
+	// Pass the speeds to the debug function
+	btReportIR(raw, action, actLeft, actRight);
+}
 
 /* ---------------------------------------------------------------------------
  * Live tuning over Bluetooth (end each entry with ; or Enter)
