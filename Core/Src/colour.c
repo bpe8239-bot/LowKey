@@ -35,9 +35,9 @@ static I2C_HandleTypeDef *tcs_hi2c = NULL;
 float tuning_red_margin = 0.18f;
 float tuning_red_min = 0.40f;
 float tuning_green_min = 0.35f;
-float tuning_blue_min = 0.20f;
+float tuning_blue_min = 0.25f;
 float tuning_blue_max = 0.42f;
-float tuning_rg_diff = 0.05f;
+float tuning_rg_diff = 0.1f;
 
 /**
  * @brief  Helper function to write a byte to a TCS34725 register
@@ -166,20 +166,21 @@ static DetectedColour_t evaluateSingleSample(void)
     float bRatio = (float)raw.b / (float)raw.c;
 
     // Red check using tuning variables
-    if (rRatio > (gRatio + tuning_red_margin) && rRatio > bRatio && rRatio > tuning_red_min)
+    if (rRatio > (gRatio + tuning_red_margin) && rRatio > bRatio && rRatio > tuning_red_min && raw.c > 100)
     {
         return COLOUR_RED;
     }
     // Green check using tuning variables
-    else if (gRatio > rRatio && gRatio > bRatio && gRatio > tuning_green_min)
-    {
-        return COLOUR_GREEN;
-    }
+
     // Blue check using tuning variables
-    else if (bRatio >= tuning_blue_min && bRatio <= tuning_blue_max && fabsf(rRatio - gRatio) <= tuning_rg_diff && raw.c > 90 && raw.c < 500)
+    else if (bRatio >= tuning_blue_min && bRatio <= tuning_blue_max && fabsf(rRatio - gRatio) <= tuning_rg_diff && raw.c > 90 && raw.c < 2000)
     {
         return COLOUR_BLUE;
     }
+    else if (gRatio > rRatio && gRatio > bRatio && gRatio > tuning_green_min && raw.c > 200)
+        {
+            return COLOUR_GREEN;
+        }
 
     return COLOUR_UNKNOWN;
 }

@@ -43,7 +43,7 @@
 #define IR_REPORT_MS       400U  /* send IR report at most 2.5 times/sec */
 #define LINE_LEVEL   GPIO_PIN_SET   /* level a sensor outputs when it sees the BLACK line.
                                        Flip to GPIO_PIN_RESET if it's the opposite */
-#define IR_DEBUG     1              /* 1 = send sensor states while line following (blocks the loop
+#define IR_DEBUG     0              /* 1 = send sensor states while line following (blocks the loop
                                        ~30-45 ms per print).*/
 #define TUNING_KEYS  1              /* 1 = live tuning enabled, 0 = disabled*/
 
@@ -104,6 +104,7 @@ static int lastDir = 0;   /* -1 = left; 1 = right; 0 = centred / unknown */ //Re
 static uint8_t holdOk = 0;      //Not called  /* 1 = line was centred or on a gentle edge, keep going straight first */
 static uint32_t lostStart = 0; //Timestamp when the current line-loss period began
 static uint8_t recovering = 0; //Indicates the robot is in a line-loss recovery period
+uint8_t is_gap = 0;
 
 // Ambiguous pattern timer
 static uint8_t  ambiguous = 0; //Indicates an ambiguous sensor pattern is currently being tracked
@@ -262,7 +263,7 @@ void lineFollow(int speed)
 	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
 	const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
 #else
-	const uint8_t leftBar  = (s[0] && (s[1] && s[2])) ? 1U : 0U;
+	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
 	const uint8_t rightBar = (s[4] && (s[3] && s[2])) ? 1U : 0U;
 #endif
 	int8_t barNow = 0;
@@ -418,6 +419,7 @@ void lineFollow(int speed)
 				forward(slowSpeed);
 				actLeft = slowSpeed; actRight = slowSpeed; // Track
 				action = "GAP / CREEP FORWARD";
+				is_gap = 1;
 			}
 		}
 	}

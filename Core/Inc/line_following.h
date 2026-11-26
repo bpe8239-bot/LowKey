@@ -26,5 +26,6 @@ uint8_t  lineAligned(void);                /* 1 = front centre sensor AND rear s
 
 extern uint32_t cornerSpeed;
 extern uint32_t branchRunSpeed;
+extern uint8_t is_gap;
 
 #endif /* INC_LINE_FOLLOWING_H_ */

@@ -170,7 +170,8 @@ uint8_t missionTick(int speed)
     const Step_t *s = &script[stepIdx];
     char line[100];
 
-    readColour();
+    if (is_gap && cornersSeen <1)
+    	readColour();
 
     switch (s->type)
     {
