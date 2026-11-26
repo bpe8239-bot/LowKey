@@ -66,10 +66,9 @@
 #define PWM_MAX            700
 
 // Dashed line gap + 90 degree corner
-#define GAP_CROSS_MS       500U   //not called  // straight-ahead hold when the line was centred (dashed gap)
 #define CORNER_FWD_MS      90U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
-#define RECOVERY_MIN_SPEED 310      // slowest pivot speed
+#define RECOVERY_MIN_SPEED 240      // slowest pivot speed
 #define CORNER_PIVOT_SPEED 300
 #define BRANCH_RUN_SPEED   280
 
@@ -101,7 +100,6 @@ uint32_t cornerSpeed = CORNER_PIVOT_SPEED;
 uint32_t branchRunSpeed = BRANCH_RUN_SPEED;
 
 static int lastDir = 0;   /* -1 = left; 1 = right; 0 = centred / unknown */ //Remembers the most recently selected steering direction
-static uint8_t holdOk = 0;      //Not called  /* 1 = line was centred or on a gentle edge, keep going straight first */
 static uint32_t lostStart = 0; //Timestamp when the current line-loss period began
 static uint8_t recovering = 0; //Indicates the robot is in a line-loss recovery period
 uint8_t is_gap = 0;
@@ -142,18 +140,6 @@ uint8_t lineReadBits(void)
             bits |= (uint8_t)(1U << i);
     }
     return bits;
-}
-
-//Rear sensor (1 = sees the line)
-uint8_t lineReadRear(void)
-{
-    return irRead(REAR_IR_PORT, REAR_IR_PIN);
-}
-
-//Front centre sensor AND rear sensor both on the line = the robot is lined up with it
-uint8_t lineAligned(void)
-{
-    return (irRead(irPin[2].port, irPin[2].pin) && irRead(REAR_IR_PORT, REAR_IR_PIN)) ? 1U : 0U;
 }
 
 // Returns and clears the pending side-bar event
@@ -224,7 +210,6 @@ static uint8_t isAmbiguous(const uint8_t s[IR_COUNT])
 void lineFollowReset(void)
 {
     lastDir = 0;
-    holdOk = 0;
     lostStart = 0;
     recovering = 0;
     ambiguous = 0;
@@ -239,6 +224,7 @@ void lineFollowReset(void)
     previousError = 0.0f;
     previousValid = 0;
     lastControlMs = HAL_GetTick() - CONTROL_PERIOD_MS;
+    is_gap = 0;
 }
 
 // Automatic line following with PD control
@@ -252,6 +238,7 @@ void lineFollow(int speed)
 		return;
 
 	lastControlMs = now;
+	is_gap = 0;
 
 	const uint8_t raw = lineReadBits();
 	uint8_t s[IR_COUNT];
@@ -318,7 +305,6 @@ void lineFollow(int speed)
 	if (barLatch != 0)
 	{
 		lastDir = barLatch;
-		holdOk = 1;
 	}
 
 	const uint8_t amb = (count > 0) ? isAmbiguous(s) : 0U;
@@ -339,7 +325,7 @@ void lineFollow(int speed)
 		}
 		else if (!cornerPivoting && count > 0)
 		{
-	    	    recovering = 0;
+			recovering = 0;
 		}
 	}
 
@@ -350,7 +336,6 @@ void lineFollow(int speed)
 		actLeft = speed; actRight = speed; // Track
 		previousValid = 0;
 		lastDir = 0;
-		holdOk = 1;
 		action = "CROSSING";
 	}
 
@@ -412,10 +397,7 @@ void lineFollow(int speed)
 			}
 			else
 			{
-				int slowSpeed = speed / 2;
-				if (slowSpeed < RECOVERY_MIN_SPEED)
-					slowSpeed = RECOVERY_MIN_SPEED;
-
+				int slowSpeed =  RECOVERY_MIN_SPEED;
 				forward(slowSpeed);
 				actLeft = slowSpeed; actRight = slowSpeed; // Track
 				action = "GAP / CREEP FORWARD";
@@ -482,7 +464,6 @@ void lineFollow(int speed)
 			turnLeft(speed);
 			actLeft = -speed; actRight = speed; // Track
 			lastDir = -1;
-			holdOk = 0;
 			previousValid = 0;
 			action = "HARD LEFT";
 		}
@@ -491,7 +472,6 @@ void lineFollow(int speed)
 			turnRight(speed);
 			actLeft = speed; actRight = -speed; // Track
 			lastDir = 1;
-			holdOk = 0;
 			previousValid = 0;
 			action = "HARD RIGHT";
 		}
@@ -516,7 +496,6 @@ void lineFollow(int speed)
 
 			previousError = error;
 			previousValid = 1;
-			holdOk = 1;
 
 			if (barLatch != 0)
 			{

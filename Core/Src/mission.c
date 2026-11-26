@@ -13,10 +13,9 @@
 #include "oled.h"
 
 #define BRANCH_COUNT_TIMEOUT_MS  20000U
-#define BRANCH_PIVOT_BLIND_MS    250U
+#define BRANCH_PIVOT_BLIND_MS    180U
 #define BRANCH_PIVOT_TIMEOUT_MS  3000U  /* Increased to 3000U to give it more time to turn */
 #define END_BAR_TIMEOUT_MS       8000U
-#define END_BAR_CONFIRM_MS       20U
 #define PIVOT_MIN_SPEED          250
 #define CENTRE_BIT               0x04U // IR read 00100
 #define END_BAR_BITS             0x15U
@@ -27,7 +26,6 @@ typedef enum
 {
     ST_FOLLOW_CORNERS = 0,
     ST_BRANCH,
-    ST_END_BAR,
     ST_STOP_CORNER,
     ST_FINISH
 } StepType_t;
@@ -63,22 +61,9 @@ uint8_t              cornersSeen = 0;
 static BranchState_t brState = BR_COUNT;
 static uint8_t       branchCount = 0;
 static uint8_t       sawWhite = 0;
-static uint8_t       barSeen = 0;
-static uint32_t      barStart = 0;
-static uint8_t       arrivedAligned = 0;
 
 
-static uint8_t finish(void)
-{
-     char line[96];
-        stopMotors();
-        snprintf(line, sizeof(line), "[MISSION] ARRIVED at ball %u (%s) - MANUAL MODE\r\n",
-                 (unsigned)target, arrivedAligned ? "aligned" : "NOT aligned");
-        btPrint(line);
-        OLED_UI_SetStatus("ARRIVED");
-    active = 0;
-    return 0;
-}
+
 
 static uint8_t fail(const char *msg)
 {
@@ -110,10 +95,6 @@ static void startStep(void)
         case ST_STOP_CORNER:
             (void)lineBarEvent();
             btPrint("[MISSION] Entered ST_STOP_CORNER (Blind window started)\r\n");
-            break;
-
-        case ST_END_BAR:
-            barSeen = 0;
             break;
 
         default:
@@ -170,199 +151,180 @@ uint8_t missionTick(int speed)
     const Step_t *s = &script[stepIdx];
     char line[100];
 
-    if (is_gap && cornersSeen <1)
+    if (is_gap && cornersSeen < 1)
     	readColour();
 
     switch (s->type)
     {
-    case ST_FOLLOW_CORNERS:
-    {
-        (void)lineBarEvent();
-        lineFollow(speed);
-        const uint8_t turned = lineFollowCorners() - cornerBase;
+		case ST_FOLLOW_CORNERS:
+		{
+			(void)lineBarEvent();
+			lineFollow(speed);
+			const uint8_t turned = lineFollowCorners() - cornerBase;
 
-        if (turned > cornersSeen)
-        {
-            cornersSeen = turned;
-            stateStart = now;
-            char msg[60];
-            snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
-            btPrint(msg);
-            OLED_UI_EventStatus("CORNER SEEN");
-        }
+			if (turned > cornersSeen)
+			{
+				cornersSeen = turned;
+				stateStart = now;
+				char msg[60];
+				snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
+				btPrint(msg);
+				OLED_UI_EventStatus("CORNER SEEN");
+			}
 
-        if (target == 0 && turned >= 1)
-            return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
+			if (target == 0 && turned >= 1)
+				return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
 
-        if (turned >= s->n)
-        {
-            if ((now - stateStart) >= CORNER_SETTLE_MS)
-                nextStep();
-        }
-        return 1;
-    }
+			if (turned >= s->n)
+			{
+				if ((now - stateStart) >= CORNER_SETTLE_MS)
+					nextStep();
+			}
+			return 1;
+		}
 
-    case ST_BRANCH:
-    {
-        if (target == 0)
-            return fail("[MISSION] FAILED - no target\r\n");
+		case ST_BRANCH:
+		{
+			if (target == 0)
+				return fail("[MISSION] FAILED - no target\r\n");
 
-        switch (brState)
-        {
-        	case BR_COUNT:
-        	{
-        		const int8_t ev = lineBarEvent();
-        		lineFollow((int)branchRunSpeed);
-                if (ev == s->side)
-                {
-                	branchCount++;
-                	snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
-                			(unsigned)branchCount, (unsigned)target);
-                	btPrint(line);
-                	OLED_UI_EventStatus("BRANCH DETECTED");
-                	if (branchCount == target)
-                	{
-                		brState = BR_FWD;
-                		stateStart = now;
-                		btPrint("Target found! Entering BR_FWD.\r\n");
-                	}
+			switch (brState)
+			{
+				case BR_COUNT:
+				{
+					const int8_t ev = lineBarEvent();
+					lineFollow((int)branchRunSpeed);
+					if (ev == s->side)
+					{
+						branchCount++;
+						snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
+								(unsigned)branchCount, (unsigned)target);
+						btPrint(line);
+						OLED_UI_EventStatus("BRANCH DETECTED");
+						if (branchCount == target)
+						{
+							brState = BR_FWD;
+							stateStart = now;
+							btPrint("Target found! Entering BR_FWD.\r\n");
+						}
 
-                }
+					}
 
-                if ((now - stateStart) >= BRANCH_COUNT_TIMEOUT_MS && brState == BR_COUNT)
-            	return fail("[MISSION] FAILED - target branch not found\r\n");
-                return 1;
-        	}
+					if ((now - stateStart) >= BRANCH_COUNT_TIMEOUT_MS && brState == BR_COUNT)
+					return fail("[MISSION] FAILED - target branch not found\r\n");
+					return 1;
+				}
 
-        	case BR_FWD:
-        	{
-        	    (void)lineBarEvent();
-        	    if (target == 1)
-        	    	branchRunSpeed = 300;
+				case BR_FWD:
+				{
+					(void)lineBarEvent();
+					if (target == 1)
+						branchRunSpeed = 300;
 
-        	    forward((int)branchRunSpeed);
-
-
-        	    uint32_t fwdElapsed = now - stateStart;
-        	    uint32_t fwdTarget = lineFollowBranchFwdMs();
+					forward((int)branchRunSpeed);
 
 
-        	    if (fwdElapsed >= fwdTarget)
-        	    {
-        	        snprintf(line, sizeof(line),
-        	                 "[BR_FWD] elapsed=%lu target=%lu speed=%d\r\n",
-        	                 (unsigned long)fwdElapsed,
-        	                 (unsigned long)fwdTarget,
-        	                 (int)branchRunSpeed);
+					uint32_t fwdElapsed = now - stateStart;
+					uint32_t fwdTarget = lineFollowBranchFwdMs();
 
-        	        btPrint(line);
 
-        	        stopMotors();
-        	        brState = BR_PIVOT;
-        	        stateStart = now;
-        	        sawWhite = 0;
-        	        btPrint("Turning into branch\r\n");
-        	    }
+					if (fwdElapsed >= fwdTarget)
+					{
+						snprintf(line, sizeof(line),
+								 "[BR_FWD] elapsed=%lu target=%lu speed=%d\r\n",
+								 (unsigned long)fwdElapsed,
+								 (unsigned long)fwdTarget,
+								 (int)branchRunSpeed);
 
-        	    return 1;
-        	}
+						btPrint(line);
 
-            case BR_PIVOT:
-            default:
-            {
-                int pivotSpeed = cornerSpeed;
-                if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
+						brState = BR_PIVOT;
+						stateStart = now;
+						sawWhite = 0;
+						btPrint("Turning into branch\r\n");
+					}
 
-                if (s->side < 0) turnLeft(cornerSpeed);
+					return 1;
+				}
 
-                // Debug: Log when we finally see white
-                if ((bits == 0) && sawWhite < 3) {
-                    sawWhite += 1;
-                    snprintf(line, sizeof(line), "[PIVOT] Saw WHITE gap! (bits=%d)\r\n", bits);
-                    btPrint(line);
-                }
+				case BR_PIVOT:
+				default:
+				{
+					int pivotSpeed = cornerSpeed;
+					if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
 
-                // Debug: Log the exit condition (Exit from BR pivot)
-                if ((now - stateStart) >= BRANCH_PIVOT_BLIND_MS && sawWhite == 3 && (bits & CENTRE_BIT))
-                {
-                    snprintf(line, sizeof(line), "[PIVOT] Found branch line! (bits=%d). Exiting pivot.\r\n", bits);
-                    btPrint(line);
-                    stopMotors();
-                    nextStep();
-                    return 1;
-                }
+					if (s->side < 0) turnLeft(cornerSpeed);
 
-                if ((now - stateStart) >= BRANCH_PIVOT_TIMEOUT_MS)
-                    return fail("[MISSION] FAILED - branch line not found after turning\r\n");
+					// Debug: Log when we finally see white
+					if ((bits == 0) && sawWhite < 3) {
+						sawWhite += 1;
+						snprintf(line, sizeof(line), "[PIVOT] Saw WHITE gap! (bits=%d)\r\n", bits);
+						btPrint(line);
+					}
 
-                return 1;
-            }
-        }
-    }
+					// Debug: Log the exit condition (Exit from BR pivot)
+					if ((now - stateStart) >= BRANCH_PIVOT_BLIND_MS && sawWhite == 3 && (bits & CENTRE_BIT))
+					{
+						snprintf(line, sizeof(line), "[PIVOT] Found branch line! (bits=%d). Exiting pivot.\r\n", bits);
+						btPrint(line);
+						stopMotors();
+						nextStep();
+						return 1;
+					}
 
-    case ST_STOP_CORNER:
-    {
-        const int8_t ev = lineBarEvent();
-        const uint32_t cornerElapsed = now - stateStart;
+					if ((now - stateStart) >= BRANCH_PIVOT_TIMEOUT_MS)
+						return fail("[MISSION] FAILED - branch line not found after turning\r\n");
 
-        if (cornerElapsed > 150U)
-        {
-            if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS || !(bits == 0))
-            {
-                snprintf(line, sizeof(line), "[STOP] Triggered! ev=%d, bits=%d (0x%02X)\r\n", ev, bits, bits);
-                btPrint(line);
-                arrivedAligned = lineAligned();
-                stopMotors();
-                nextStep();
-                return 1;
-            }
-        }
-        else
-        {
-            (void)lineBarEvent();
-            // Just for debug: print when we are safe in the blind window
-            // You can comment this out later, but leave it for the test
-            if (cornerElapsed < 200U) {
-                 snprintf(line, sizeof(line), "[STOP] Blind window, ignoring event. bits=%d\r\n", bits);
-                 btPrint(line);
-            }
-        }
+					return 1;
+				}
+			}
+		}
 
-        if ((now - stateStart) >= END_BAR_TIMEOUT_MS)
-            return fail("[MISSION] FAILED - corner after branch not found\r\n");
+		case ST_STOP_CORNER:
+		{
+			//const int8_t ev = lineBarEvent();
+			const uint32_t cornerElapsed = now - stateStart;
 
-        lineFollow(speed);
-        return 1;
-    }
+			if (cornerElapsed > 150U)
+			{
+				if (/*ev != 0 ||*/ (bits & END_BAR_BITS) == END_BAR_BITS || !(bits == 0))
+				{
+					snprintf(line, sizeof(line), "[STOP] Triggered!, bits=%d (0x%02X)\r\n", /*ev,*/ bits, bits);
+					btPrint(line);
+					stopMotors();
+					nextStep();
+					return 1;
+				}
+			}
+			else
+			{
+				// Just for debug: print when we are safe in the blind window
+				// You can comment this out later, but leave it for the test
+				if (cornerElapsed < 200U)
+				{
+					snprintf(line, sizeof(line), "[STOP] Blind window, ignoring event. bits=%d\r\n", bits);
+					btPrint(line);
+				}
+			}
 
-    case ST_END_BAR:
-    {
-        if ((bits & END_BAR_BITS) == END_BAR_BITS || bits == 0)
-        {
-            if (!barSeen) { barSeen = 1; barStart = now; }
-            if ((now - barStart) >= END_BAR_CONFIRM_MS)
-            {
-                arrivedAligned = lineAligned();
-                stopMotors();
-                nextStep();
-                return 1;
-            }
-        }
-        else
-        {
-            barSeen = 0;
-        }
+			if ((now - stateStart) >= END_BAR_TIMEOUT_MS)
+				return fail("[MISSION] FAILED - corner after branch not found\r\n");
 
-        if ((now - stateStart) >= END_BAR_TIMEOUT_MS)
-            return fail("[MISSION] FAILED - end bar not found\r\n");
+			lineFollow(speed);
+			return 1;
+		}
 
-        (void)lineBarEvent();
-        lineFollow(speed);
-        return 1;
-    }
-
-    case ST_FINISH:
-    default:
-        return finish();
+		case ST_FINISH:
+		default:
+		{
+			char line[96];
+			stopMotors();
+			snprintf(line, sizeof(line), "[MISSION] ARRIVED at ball %u - MANUAL MODE\r\n",
+					(unsigned)target);
+			btPrint(line);
+			OLED_UI_SetStatus("ARRIVED");
+			active = 0;
+			return 0;
+		}
     }
 }
