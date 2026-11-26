@@ -233,23 +233,38 @@ uint8_t missionTick(int speed)
                 return 1;
         	}
 
-            case BR_FWD:
-            {
-                (void)lineBarEvent();
-                forward((int)branchRunSpeed);
-                uint32_t fwdElapsed = now - stateStart;
-                uint32_t fwdTarget = lineFollowBranchFwdMs();
-                if (fwdElapsed >= fwdTarget)
-                {
-                    brState = BR_PIVOT;
-                    stateStart = now;
-                    sawWhite = 0;
-                    btPrint("Turning into branch\r\n");
-                    if (s->side < 0) btPrint("[MISSION] Action: turnLeft()\r\n");
-                    else             btPrint("[MISSION] Action: turnRight()\r\n");
-                }
-                return 1;
-            }
+        	case BR_FWD:
+        	{
+        	    (void)lineBarEvent();
+        	    if (target == 1)
+        	    	branchRunSpeed = 300;
+
+        	    forward((int)branchRunSpeed);
+
+
+        	    uint32_t fwdElapsed = now - stateStart;
+        	    uint32_t fwdTarget = lineFollowBranchFwdMs();
+
+
+        	    if (fwdElapsed >= fwdTarget)
+        	    {
+        	        snprintf(line, sizeof(line),
+        	                 "[BR_FWD] elapsed=%lu target=%lu speed=%d\r\n",
+        	                 (unsigned long)fwdElapsed,
+        	                 (unsigned long)fwdTarget,
+        	                 (int)branchRunSpeed);
+
+        	        btPrint(line);
+
+        	        stopMotors();
+        	        brState = BR_PIVOT;
+        	        stateStart = now;
+        	        sawWhite = 0;
+        	        btPrint("Turning into branch\r\n");
+        	    }
+
+        	    return 1;
+        	}
 
             case BR_PIVOT:
             default:
@@ -257,22 +272,21 @@ uint8_t missionTick(int speed)
                 int pivotSpeed = cornerSpeed;
                 if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
 
-                if (s->side < 0) turnLeft(350);
-                else             turnRight(350);
+                if (s->side < 0) turnLeft(cornerSpeed);
 
                 // Debug: Log when we finally see white
-                if ((bits == 0) && !sawWhite) {
-                    sawWhite = 1;
+                if ((bits == 0) && sawWhite < 3) {
+                    sawWhite += 1;
                     snprintf(line, sizeof(line), "[PIVOT] Saw WHITE gap! (bits=%d)\r\n", bits);
                     btPrint(line);
                 }
 
                 // Debug: Log the exit condition (Exit from BR pivot)
-                if ((now - stateStart) >= BRANCH_PIVOT_BLIND_MS && sawWhite && (bits & CENTRE_BIT))
+                if ((now - stateStart) >= BRANCH_PIVOT_BLIND_MS && sawWhite == 3 && (bits & CENTRE_BIT))
                 {
                     snprintf(line, sizeof(line), "[PIVOT] Found branch line! (bits=%d). Exiting pivot.\r\n", bits);
                     btPrint(line);
-                    lineFollowReset();
+                    stopMotors();
                     nextStep();
                     return 1;
                 }
@@ -292,7 +306,7 @@ uint8_t missionTick(int speed)
 
         if (cornerElapsed > 150U)
         {
-            if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS || (bits == 0))
+            if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS || !(bits == 0))
             {
                 snprintf(line, sizeof(line), "[STOP] Triggered! ev=%d, bits=%d (0x%02X)\r\n", ev, bits, bits);
                 btPrint(line);
