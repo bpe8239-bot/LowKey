@@ -44,9 +44,6 @@
  *  KC	=  Straight-ahead time at a corner before pivoting (Not needed)
  *  KJ	=  Straight-ahead time after counting the target branch,
  *  	   before pivoting into it
- *  KC and KJ are timed straight-ahead drives, so they’re technically time-based.
- *  They sit in this group because the junction-counting method needs them,
- *  whether or not the backup is enabled.
  *
  *
  */
@@ -354,7 +351,7 @@ static void handleBtCommand(char c)
     // --- Standard Driving & Mission Commands (Always Available) ---
     if (c >= '1' && c <= '9')
     {
-        speed = 100 + (c - '1') * 87;  /* 1..9 -> 100..996 */
+        speed = 200 + (c - '1') * 50;  /* 1 -- 9 -> 200 -- 600 */
         lastCmdTime = HAL_GetTick();
         snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
         btPrint(line);

@@ -559,7 +559,7 @@ void lineFollow(int speed)
 #define MS_MAX            5000.0f
 
 static uint8_t  entryState = 0;      /* 0 idle, 1 got K, 2 reading value */
-static char     entryTarget = 0;     /* 'P', 'D', 'C', 'J', 'A', 'B' or 'W' */
+static char     entryTarget = 0;     /* 'P', 'D', 'C', 'J' */
 static char     entryBuf[10];
 static uint8_t  entryLen = 0;
 static uint32_t entryTick = 0;
