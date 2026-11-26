@@ -237,7 +237,6 @@ uint8_t missionTick(int speed)
 								 (int)branchRunSpeed);
 
 						btPrint(line);
-
 						brState = BR_PIVOT;
 						stateStart = now;
 						sawWhite = 0;

@@ -351,7 +351,7 @@ static void handleBtCommand(char c)
     // --- Standard Driving & Mission Commands (Always Available) ---
     if (c >= '1' && c <= '9')
     {
-        speed = 200 + (c - '1') * 50;  /* 1 -- 9 -> 200 -- 600 */
+        speed = 200 + (c - '1') * 25;  /* 1 -- 9 -> 200 -- 400 */
         lastCmdTime = HAL_GetTick();
         snprintf(line, sizeof(line), "[SPEED] PWM = %d / 999\r\n", speed);
         btPrint(line);
