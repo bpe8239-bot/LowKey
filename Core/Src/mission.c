@@ -13,17 +13,16 @@
 #include "oled.h"
 
 #define BRANCH_COUNT_TIMEOUT_MS  20000U
-#define BRANCH_PIVOT_BLIND_MS    300U
+#define BRANCH_PIVOT_BLIND_MS    250U
 #define BRANCH_PIVOT_TIMEOUT_MS  3000U  /* Increased to 3000U to give it more time to turn */
 #define END_BAR_TIMEOUT_MS       8000U
-#define END_BAR_CONFIRM_MS       30U
-#define PIVOT_MIN_SPEED          400
+#define END_BAR_CONFIRM_MS       20U
+#define PIVOT_MIN_SPEED          250
 #define CENTRE_BIT               0x04U // IR read 00100
 #define END_BAR_BITS             0x15U
-#define BRANCH_SPEED             390
-#define BRANCH_MIN_SPEED         380
+#define BRANCH_SPEED             280
 #define BRANCH_END_TIMEOUT_MS    4000U
-#define CORNER_SETTLE_MS         250U
+#define CORNER_SETTLE_MS         150U
 
 typedef enum
 {
@@ -68,6 +67,7 @@ static uint8_t       sawWhite = 0;
 static uint8_t       barSeen = 0;
 static uint32_t      barStart = 0;
 static uint8_t       arrivedAligned = 0;
+
 
 static uint8_t finish(void)
 {
@@ -162,14 +162,6 @@ void missionStart(void)
     btPrint("[MISSION] START - reading colour card\r\n");
 }
 
-static int branchSpeed(int speed)
-{
-    int s = speed / 2;
-    if (s < BRANCH_MIN_SPEED) s = BRANCH_MIN_SPEED;
-    if (s > BRANCH_SPEED)     s = BRANCH_SPEED;
-    return s;
-}
-
 uint8_t missionTick(int speed)
 {
     if (!active) return 0;
@@ -220,7 +212,7 @@ uint8_t missionTick(int speed)
         	case BR_COUNT:
         	{
         		const int8_t ev = lineBarEvent();
-        		lineFollow(branchSpeed(speed));
+        		lineFollow(BRANCH_SPEED);
                 if (ev == s->side)
                 {
                 	branchCount++;
@@ -245,7 +237,8 @@ uint8_t missionTick(int speed)
             case BR_FWD:
             {
                 (void)lineBarEvent();
-                lineFollow(branchSpeed(speed));
+                forward(350);
+                btPrint("forwarding");
                 uint32_t fwdElapsed = now - stateStart;
                 uint32_t fwdTarget = lineFollowBranchFwdMs();
                 if (fwdElapsed >= fwdTarget)
@@ -263,14 +256,14 @@ uint8_t missionTick(int speed)
             case BR_PIVOT:
             default:
             {
-                int pivotSpeed = 480;
+                int pivotSpeed = cornerSpeed;
                 if (pivotSpeed < PIVOT_MIN_SPEED) pivotSpeed = PIVOT_MIN_SPEED;
 
-                if (s->side < 0) turnLeft(pivotSpeed);
-                else             turnRight(pivotSpeed);
+                if (s->side < 0) turnLeft(350);
+                else             turnRight(350);
 
                 // Debug: Log when we finally see white
-                if (!(bits & CENTRE_BIT) && !sawWhite) {
+                if ((bits == 0) && !sawWhite) {
                     sawWhite = 1;
                     snprintf(line, sizeof(line), "[PIVOT] Saw WHITE gap! (bits=%d)\r\n", bits);
                     btPrint(line);
@@ -299,9 +292,9 @@ uint8_t missionTick(int speed)
         const int8_t ev = lineBarEvent();
         const uint32_t cornerElapsed = now - stateStart;
 
-        if (cornerElapsed > 1500U)
+        if (cornerElapsed > 150U)
         {
-            if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS)
+            if (ev != 0 || (bits & END_BAR_BITS) == END_BAR_BITS || (bits == 0))
             {
                 snprintf(line, sizeof(line), "[STOP] Triggered! ev=%d, bits=%d (0x%02X)\r\n", ev, bits, bits);
                 btPrint(line);
@@ -331,7 +324,7 @@ uint8_t missionTick(int speed)
 
     case ST_END_BAR:
     {
-        if ((bits & END_BAR_BITS) == END_BAR_BITS)
+        if ((bits & END_BAR_BITS) == END_BAR_BITS || bits == 0)
         {
             if (!barSeen) { barSeen = 1; barStart = now; }
             if ((now - barStart) >= END_BAR_CONFIRM_MS)
