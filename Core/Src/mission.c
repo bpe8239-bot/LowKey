@@ -20,7 +20,6 @@
 #define PIVOT_MIN_SPEED          250
 #define CENTRE_BIT               0x04U // IR read 00100
 #define END_BAR_BITS             0x15U
-#define BRANCH_SPEED             280
 #define BRANCH_END_TIMEOUT_MS    4000U
 #define CORNER_SETTLE_MS         150U
 
@@ -212,7 +211,7 @@ uint8_t missionTick(int speed)
         	case BR_COUNT:
         	{
         		const int8_t ev = lineBarEvent();
-        		lineFollow(BRANCH_SPEED);
+        		lineFollow((int)branchRunSpeed);
                 if (ev == s->side)
                 {
                 	branchCount++;
@@ -237,8 +236,7 @@ uint8_t missionTick(int speed)
             case BR_FWD:
             {
                 (void)lineBarEvent();
-                forward(350);
-                btPrint("forwarding");
+                forward((int)branchRunSpeed);
                 uint32_t fwdElapsed = now - stateStart;
                 uint32_t fwdTarget = lineFollowBranchFwdMs();
                 if (fwdElapsed >= fwdTarget)

@@ -25,4 +25,6 @@ uint8_t  lineReadRear(void);               /* 1 = rear sensor sees the line */
 uint8_t  lineAligned(void);                /* 1 = front centre sensor AND rear sensor both on the line */
 
 extern uint32_t cornerSpeed;
+extern uint32_t branchRunSpeed;
+
 #endif /* INC_LINE_FOLLOWING_H_ */

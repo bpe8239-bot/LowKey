@@ -71,6 +71,7 @@
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 310      // slowest pivot speed
 #define CORNER_PIVOT_SPEED 300
+#define BRANCH_RUN_SPEED   280
 
 // Side bars (branches / corners)
 #define BAR_LOCKOUT_MS     250U     // ignore a new bar event for 250ms after the last one
@@ -97,6 +98,7 @@ static float kd = KD_DEFAULT;
 static uint32_t cornerFwdMs = CORNER_FWD_MS; //KC
 static uint32_t branchFwdMs = BRANCH_FWD_MS; //KJ
 uint32_t cornerSpeed = CORNER_PIVOT_SPEED;
+uint32_t branchRunSpeed = BRANCH_RUN_SPEED;
 
 static int lastDir = 0;   /* -1 = left; 1 = right; 0 = centred / unknown */ //Remembers the most recently selected steering direction
 static uint8_t holdOk = 0;      //Not called  /* 1 = line was centred or on a gentle edge, keep going straight first */
@@ -387,14 +389,14 @@ void lineFollow(int speed)
 				cornerPivoting = 1;
 				if (lastDir == -1)
 				{
-					turnLeft(CORNER_PIVOT_SPEED);
-					actLeft = -CORNER_PIVOT_SPEED; actRight = CORNER_PIVOT_SPEED; // Track
+					turnLeft((int)cornerSpeed);
+					actLeft = -(int)cornerSpeed; actRight = (int)cornerSpeed; // Track
 					action = "CORNER - PIVOT LEFT";
 				}
 				else
 				{
-					turnRight(CORNER_PIVOT_SPEED);
-					actLeft = CORNER_PIVOT_SPEED; actRight = -CORNER_PIVOT_SPEED; // Track
+					turnRight((int)cornerSpeed);
+					actLeft = (int)cornerSpeed; actRight = -(int)cornerSpeed; // Track
 					action = "CORNER - PIVOT RIGHT";
 				}
 			}
@@ -434,13 +436,13 @@ void lineFollow(int speed)
 		{
 			if (lastDir == -1)
 			{
-				turnLeft(CORNER_PIVOT_SPEED);
-				actLeft = -CORNER_PIVOT_SPEED; actRight = CORNER_PIVOT_SPEED; // Track
+				turnLeft((int)cornerSpeed);
+				actLeft = -(int)cornerSpeed; actRight = (int)cornerSpeed; // Track
 			}
 			else
 			{
-				turnRight(CORNER_PIVOT_SPEED);
-				actLeft = CORNER_PIVOT_SPEED; actRight = -CORNER_PIVOT_SPEED; // Track
+				turnRight((int)cornerSpeed);
+				actLeft = (int)cornerSpeed; actRight = -(int)cornerSpeed; // Track
 			}
 			action = "CORNER - PIVOT (LINE SEEN)";
 		}
@@ -567,13 +569,13 @@ static uint32_t entryTick = 0;
 
 static void printGains(void)
 {
-    char line[110];
+    char line[140];
     /* print without %f (newlib-nano has no float printf by default) */
     int kdHundredths = (int)(kd * 100.0f + 0.5f);
     snprintf(line, sizeof(line),
-             "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu Branch=%lu ms CornerSpeed=%i\r\n",
+             "[TUNE] Kp=%d Kd=%d.%02d Corner=%lu Branch=%lu ms CornerSpeed=%d BranchSpeed=%d\r\n",
              (int)(kp + 0.5f), kdHundredths / 100, kdHundredths % 100,
-             (unsigned long)cornerFwdMs, (unsigned long)branchFwdMs), (int)cornerSpeed;
+             (unsigned long)cornerFwdMs, (unsigned long)branchFwdMs, (int)cornerSpeed, (int)branchRunSpeed);
     btPrint(line);
 }
 
@@ -643,14 +645,14 @@ uint8_t pidTuneKey(char c)
         char up = c;
         if (up >= 'a' && up <= 'z') up = (char)(up - 32);
 
-        if (up == 'P' || up == 'D' || up == 'C' || up == 'J' || up == 'A')
+        if (up == 'P' || up == 'D' || up == 'C' || up == 'J' || up == 'A' || up == 'B')
         {
             entryTarget = up;
         }
         else
         {
             entryState = 0;
-            btPrint("[TUNE] KP KD KC KJ then a number and ;\r\n");
+            btPrint("[TUNE] KP KD KC KJ KA KB then a number and ;\r\n");
             return 1;
         }
         entryState = 2;
@@ -672,7 +674,8 @@ uint8_t pidTuneKey(char c)
         else if (entryTarget == 'D') kd = (v > KD_MAX) ? KD_MAX : v;
         else if (entryTarget == 'C') cornerFwdMs = (uint32_t)((v > MS_MAX) ? MS_MAX : v);
         else if (entryTarget == 'J') branchFwdMs = (uint32_t)((v > MS_MAX) ? MS_MAX : v);
-        else if (entryTarget == 'A') cornerSpeed = (uint32_t)((v > 700) ? MS_MAX : v);
+        else if (entryTarget == 'A') cornerSpeed = (uint32_t)((v > 700.0f) ? 700.0f : v);
+        else if (entryTarget == 'B') branchRunSpeed = (uint32_t)((v > 700.0f) ? 700.0f : v);
         printGains();
         return 1;
     }
