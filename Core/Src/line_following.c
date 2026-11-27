@@ -43,7 +43,7 @@
 #define IR_REPORT_MS       400U  /* send IR report at most 2.5 times/sec */
 #define LINE_LEVEL   GPIO_PIN_SET   /* level a sensor outputs when it sees the BLACK line.
                                        Flip to GPIO_PIN_RESET if it's the opposite */
-#define IR_DEBUG     0              /* 1 = send sensor states while line following (blocks the loop
+#define IR_DEBUG     1              /* 1 = send sensor states while line following (blocks the loop
                                        ~30-45 ms per print).*/
 #define TUNING_KEYS  1              /* 1 = live tuning enabled, 0 = disabled*/
 
@@ -58,7 +58,7 @@
 #define KP_DEFAULT         105.0f   // PD over 3 sensors
 #define HARD_ERROR         2.0f     // |error| at or beyond this: pivot in place (line only under S1 or S3)
 #else
-#define KP_DEFAULT         75.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
+#define KP_DEFAULT         55.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
 #define HARD_ERROR         3.0f
 #endif
 #define KD_DEFAULT         1.00f     //Damper
@@ -70,7 +70,7 @@
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 240      // slowest pivot speed
 #define CORNER_PIVOT_SPEED 300
-#define BRANCH_RUN_SPEED   280
+#define BRANCH_RUN_SPEED   250
 
 // Side bars (branches / corners)
 #define BAR_LOCKOUT_MS     250U     // ignore a new bar event for 250ms after the last one
@@ -80,7 +80,7 @@
 #define AMBIG_HOLD_MS      100U     // keep the last motor command this long before stopping
 
 // Side branch (T-junction) turn, used by mission.c
-#define BRANCH_FWD_MS      320U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
+#define BRANCH_FWD_MS      200U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
 
 typedef struct
 {

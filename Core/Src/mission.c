@@ -190,39 +190,61 @@ uint8_t missionTick(int speed)
 
 			switch (brState)
 			{
-				case BR_COUNT:
-				{
-					const int8_t ev = lineBarEvent();
-					lineFollow((int)branchRunSpeed);
-					if (ev == s->side)
-					{
-						branchCount++;
-						snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
-								(unsigned)branchCount, (unsigned)target);
-						btPrint(line);
-						OLED_UI_EventStatus("BRANCH DETECTED");
-						if (branchCount == target)
-						{
-							brState = BR_FWD;
-							stateStart = now;
-							btPrint("Target found! Entering BR_FWD.\r\n");
-						}
+			case BR_COUNT:
+			{
+			    const int8_t ev = lineBarEvent();
+			    lineFollow((int)branchRunSpeed);
 
-					}
+			    // =========================================================
+			       // 1. TIME-BASED LOGIC
+			       // =========================================================
+			       if ((now - stateStart) >= 1500U) // 1500ms = 1.5 seconds
+			       {
+			           if (target == 1)
+			           {
+			               // Fully time-based for Target 1
+			               btPrint("[MISSION] Target 1 forced by TIME!\r\n");
+			               branchCount = 1;
+			               brState = BR_FWD;
+			               stateStart = now;
+			               return 1; // Exit BR_COUNT and go to BR_FWD immediately
+			           }
+			           else if (branchCount == 0)
+			           {
+			               // For Target 2 or 3: If time is up and count is 0, force count to 1
+			               branchCount = 1;
+			               stateStart = now; // Reset timer so this doesn't trigger again
 
-					if ((now - stateStart) >= BRANCH_COUNT_TIMEOUT_MS && brState == BR_COUNT)
-					return fail("[MISSION] FAILED - target branch not found\r\n");
-					return 1;
-				}
+			               snprintf(line, sizeof(line), "[MISSION] Time up! Skipping to branch %u\r\n", branchCount);
+			               btPrint(line);
+			           }
+			       }
 
+			    if (ev == s->side)
+			    {
+			        branchCount++;
+			        snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
+			                (unsigned)branchCount, (unsigned)target);
+			        btPrint(line);
+			        OLED_UI_EventStatus("BRANCH DETECTED");
+			        if (branchCount == target)
+			        {
+			            brState = BR_FWD;
+			            stateStart = now;
+			            btPrint("Target found! Entering BR_FWD.\r\n");
+			        }
+			    }
+
+			    if ((now - stateStart) >= BRANCH_COUNT_TIMEOUT_MS && brState == BR_COUNT)
+			        return fail("[MISSION] FAILED - target branch not found\r\n");
+
+			    return 1;
+			}
 				case BR_FWD:
 				{
 					(void)lineBarEvent();
-					if (target == 1)
-						branchRunSpeed = 300;
-
-					forward((int)branchRunSpeed);
-
+					int fwdSpeed = (target == 1) ? 500 : (int)branchRunSpeed;
+					forward(fwdSpeed);
 
 					uint32_t fwdElapsed = now - stateStart;
 					uint32_t fwdTarget = lineFollowBranchFwdMs();
@@ -234,7 +256,7 @@ uint8_t missionTick(int speed)
 								 "[BR_FWD] elapsed=%lu target=%lu speed=%d\r\n",
 								 (unsigned long)fwdElapsed,
 								 (unsigned long)fwdTarget,
-								 (int)branchRunSpeed);
+								 (int)fwdSpeed);
 
 						btPrint(line);
 						brState = BR_PIVOT;
