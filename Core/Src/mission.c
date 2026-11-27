@@ -21,6 +21,7 @@
 #define END_BAR_BITS             0x15U
 #define BRANCH_END_TIMEOUT_MS    4000U
 #define CORNER_SETTLE_MS         150U
+#define CORNER1_BLIND_MS         1000U  //change to 2000ms for the
 
 typedef enum
 {
@@ -156,32 +157,41 @@ uint8_t missionTick(int speed)
 
     switch (s->type)
     {
-		case ST_FOLLOW_CORNERS:
+
+	case ST_FOLLOW_CORNERS:
+	{
+		(void)lineBarEvent();
+		lineFollow(speed);
+
+		/* Absorb any false double-triggers from Corner 1 during the blind window */
+		if (cornersSeen == 1 && (now - stateStart) < CORNER1_BLIND_MS)
 		{
-			(void)lineBarEvent();
-			lineFollow(speed);
-			const uint8_t turned = lineFollowCorners() - cornerBase;
-
-			if (turned > cornersSeen)
-			{
-				cornersSeen = turned;
-				stateStart = now;
-				char msg[60];
-				snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
-				btPrint(msg);
-				OLED_UI_EventStatus("CORNER SEEN");
-			}
-
-			if (target == 0 && turned >= 1)
-				return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
-
-			if (turned >= s->n)
-			{
-				if ((now - stateStart) >= CORNER_SETTLE_MS)
-					nextStep();
-			}
-			return 1;
+			cornerBase = lineFollowCorners() - cornersSeen;
 		}
+
+		const uint8_t turned = lineFollowCorners() - cornerBase;
+
+		if (turned > cornersSeen)
+		{
+			cornersSeen = turned;
+			stateStart = now;
+			char msg[60];
+			snprintf(msg, sizeof(msg), "Corner Seen %u\r\n", (unsigned)cornersSeen);
+			btPrint(msg);
+			OLED_UI_EventStatus("CORNER SEEN");
+		}
+
+		if (target == 0 && turned >= 1)
+			return fail("[MISSION] FAILED - no colour read before the first corner\r\n");
+
+		if (turned >= s->n)
+		{
+			if ((now - stateStart) >= CORNER_SETTLE_MS)
+				nextStep();
+		}
+		return 1;
+	}
+
 
 		case ST_BRANCH:
 		{
@@ -306,7 +316,7 @@ uint8_t missionTick(int speed)
 			//const int8_t ev = lineBarEvent();
 			const uint32_t cornerElapsed = now - stateStart;
 
-			if (cornerElapsed > 150U)
+			if (cornerElapsed > 100U)
 			{
 				if (/*ev != 0 ||*/ (bits & END_BAR_BITS) == END_BAR_BITS || !(bits == 0))
 				{

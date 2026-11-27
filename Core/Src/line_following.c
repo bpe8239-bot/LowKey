@@ -59,18 +59,18 @@
 #define HARD_ERROR         2.0f     // |error| at or beyond this: pivot in place (line only under S1 or S3)
 #else
 #define KP_DEFAULT         55.0f   // PD over 5 sensors steers in finer steps, so a lower Kp
-#define HARD_ERROR         3.0f
+#define HARD_ERROR         3.5f
 #endif
-#define KD_DEFAULT         1.00f     //Damper
+#define KD_DEFAULT         0.35f     //Damper
 #define CONTROL_PERIOD_MS  10U
 #define PWM_MAX            700
 
 // Dashed line gap + 90 degree corner
-#define CORNER_FWD_MS      90U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
+#define CORNER_FWD_MS      10U     // straight-ahead time before pivoting at a corner (~11 cm at 20 cm/s) (tune: KC<ms>;)
 #define PIVOT_TIMEOUT_MS   1500U    // give up if the pivot finds no line
 #define RECOVERY_MIN_SPEED 240      // slowest pivot speed
 #define CORNER_PIVOT_SPEED 300
-#define BRANCH_RUN_SPEED   250
+#define BRANCH_RUN_SPEED   280
 
 // Side bars (branches / corners)
 #define BAR_LOCKOUT_MS     250U     // ignore a new bar event for 250ms after the last one
@@ -80,7 +80,7 @@
 #define AMBIG_HOLD_MS      100U     // keep the last motor command this long before stopping
 
 // Side branch (T-junction) turn, used by mission.c
-#define BRANCH_FWD_MS      200U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
+#define BRANCH_FWD_MS      100U     // straight-ahead time from seeing the branch to starting the pivot (~13 cm at 20 cm/s) (tune: KJ<ms>;)
 
 typedef struct
 {
@@ -250,7 +250,7 @@ void lineFollow(int speed)
 	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
 	const uint8_t rightBar = (s[4] && (s[3] || s[2])) ? 1U : 0U;
 #else
-	const uint8_t leftBar  = (s[0] && (s[1] || s[2])) ? 1U : 0U;
+	const uint8_t leftBar  = (s[0] && (s[1] && s[2])) ? 1U : 0U;
 	const uint8_t rightBar = (s[4] && (s[3] && s[2])) ? 1U : 0U;
 #endif
 	int8_t barNow = 0;
