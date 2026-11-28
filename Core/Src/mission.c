@@ -230,7 +230,7 @@ uint8_t missionTick(int speed)
 			           }
 			       }
 
-			    if (ev == s->side)
+			    if (ev == s->side && (now - stateStart) > 250U)
 			    {
 			        branchCount++;
 			        snprintf(line, sizeof(line), "[MISSION] Branch %u (target %u)\r\n",
